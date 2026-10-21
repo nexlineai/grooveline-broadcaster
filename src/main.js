@@ -27,17 +27,135 @@ function maskSecrets(s) {
     .replace(/(\brtmps?:\/\/[^\s'"]+\/)[^\s\/'"]{6,}/gi, '$1****');
 }
 
-// Guard all IPC sends — window may be destroyed on quit
+// Guard all IPC sends — window may be destroyed on quit. Every Stream Log line also goes to the log file.
 function safeSend(sender, channel, data) {
+  if (data && typeof data === 'object') {
+    if (typeof data.msg === 'string') data = { ...data, msg: maskSecrets(data.msg) };
+    if (typeof data.raw === 'string') data = { ...data, raw: maskSecrets(data.raw) };
+  }
+  if (channel === 'stream-log' && data && data.msg) writeLog(data.type, data.msg, data.tech);
   try {
-    if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()) {
-      if (data && typeof data === 'object') {
-        if (typeof data.msg === 'string') data = { ...data, msg: maskSecrets(data.msg) };
-        if (typeof data.raw === 'string') data = { ...data, raw: maskSecrets(data.raw) };
-      }
-      sender.send(channel, data);
-    }
+    if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()) sender.send(channel, data);
   } catch (_) {}
+}
+
+// ─── Build info (1.5.0) ───────────────────────────────────────────────────────
+// src/build-info.json is written by scripts/stamp-build.js (electron-builder's beforePack hook) into every
+// packaged build. Without it (npm start) the commit reads "dev".
+function buildInfo() {
+  let b = {};
+  try { b = JSON.parse(fs.readFileSync(path.join(__dirname, 'build-info.json'), 'utf8')); } catch {}
+  return { version: app.getVersion(), commit: b.commit || 'dev', date: b.date || null };
+}
+const OS_NAME = { linux: 'Linux', win32: 'Windows', darwin: 'macOS' }[process.platform] || process.platform;
+function buildLine() {
+  const b = buildInfo();
+  return `Grooveline Broadcaster ${b.version} (${b.commit}${b.date ? ', built ' + b.date.slice(0, 10) : ''}) · ${OS_NAME} ${os.release()} ${process.arch} · Electron ${process.versions.electron}`;
+}
+
+// ─── Log file (1.5.0) ─────────────────────────────────────────────────────────
+// <userData>/logs/broadcaster.log is this session; broadcaster.1.log … .4.log are the four before it. One line per
+// Stream Log entry with an ISO timestamp, secrets masked. "[tech]" marks the raw ffmpeg lines.
+const LOG_KEEP = 5, LOG_MAX_BYTES = 5e6;
+let logFile = null, logBytes = 0;
+function logsDir() { return path.join(app.getPath('userData'), 'logs'); }
+function openLogFile() {
+  try {
+    const dir = logsDir();
+    fs.mkdirSync(dir, { recursive: true });
+    for (let i = LOG_KEEP - 1; i > 0; i--) {
+      const from = path.join(dir, i === 1 ? 'broadcaster.log' : `broadcaster.${i - 1}.log`);
+      try { fs.renameSync(from, path.join(dir, `broadcaster.${i}.log`)); } catch {}
+    }
+    logFile = path.join(dir, 'broadcaster.log');
+    logBytes = 0;
+  } catch { logFile = null; }
+}
+function writeLog(type, msg, tech) {
+  if (!logFile || logBytes > LOG_MAX_BYTES) return;
+  const line = `${new Date().toISOString()} ${String(type || 'info').padEnd(7)}${tech ? ' [tech]' : ''} ${maskSecrets(String(msg)).replace(/\s*\n\s*/g, ' ')}\n`;
+  try { fs.appendFileSync(logFile, line); logBytes += line.length; } catch {}
+  if (logBytes > LOG_MAX_BYTES) { try { fs.appendFileSync(logFile, `${new Date().toISOString()} warn    Log file full (5 MB): later lines are only in the app.\n`); } catch {} }
+}
+
+// ─── Level meter tap (1.5.0) ──────────────────────────────────────────────────
+// While live, every ffmpeg gets one extra output: the stream's own audio chain (channel pair + volume) as raw
+// 16-bit stereo at 44.1 kHz on stdout (176 KB/s: a 64 KB pipe holds ~0.37 s if main is briefly busy). The meters show exactly what leaves the app, from the same process,
+// so the device is never opened twice, and live recording writes the same samples.
+// stdout must ALWAYS be drained: a full pipe blocks ffmpeg, time= stops, and the supervisor relaunches in a loop.
+const TAP_RATE = 44100, TAP_BLOCK = 1470; // 30 meter updates per second
+function meterTapArgs(inputIdx, chain) {
+  return ['-map', `${inputIdx}:a?`, '-af', chain, '-c:a', 'pcm_s16le', '-ar', String(TAP_RATE), '-ac', '2', '-f', 's16le', 'pipe:1'];
+}
+const toDb = v => v > 1e-6 ? 20 * Math.log10(v) : -120;
+function attachMeterTap(proc, sender, kind = 'live') {
+  if (!proc || !proc.stdout) return;
+  let rest = Buffer.alloc(0), n = 0, pL = 0, pR = 0, sL = 0, sR = 0;
+  proc.stdout.on('data', chunk => {
+    const buf = rest.length ? Buffer.concat([rest, chunk]) : chunk;
+    const frames = Math.floor(buf.length / 4);
+    // Live recording (1.5.0): the same samples the meters read. buf always starts on a frame boundary.
+    if (recWriteStream && recMode === 'pcm' && recFfmpegProc && recFfmpegProc.stdin && !recFfmpegProc.stdin.destroyed) {
+      try { recFfmpegProc.stdin.write(Buffer.from(buf.subarray(0, frames * 4))); } catch {}
+    }
+    for (let i = 0; i < frames; i++) {
+      const l = buf.readInt16LE(i * 4) / 32768, r = buf.readInt16LE(i * 4 + 2) / 32768;
+      const al = l < 0 ? -l : l, ar = r < 0 ? -r : r;
+      if (al > pL) pL = al;
+      if (ar > pR) pR = ar;
+      sL += l * l; sR += r * r;
+      if (++n === TAP_BLOCK) {
+        try {
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            sender.send('meter', { kind, pL: toDb(pL), pR: toDb(pR), rL: toDb(Math.sqrt(sL / n)), rR: toDb(Math.sqrt(sR / n)) });
+          }
+        } catch {}
+        n = 0; pL = pR = sL = sR = 0;
+      }
+    }
+    rest = Buffer.from(buf.subarray(frames * 4));
+  });
+  proc.stdout.on('error', () => {});
+}
+
+// ─── Preview meter on Linux (1.5.0) ───────────────────────────────────────────
+// Chromium can't open PipeWire/Pulse monitors ("Monitor of …"), and its device list doesn't always line up with
+// ffmpeg's. So on Linux the levels before going live come from ffmpeg capturing exactly the source the stream will
+// use (PipeWire lets several apps record one source). It runs at 100 %; the renderer applies the fader. A recording
+// made while not live is fed from it too. start-stream stops it first.
+let previewMeterProc = null;
+function stopPreviewMeter() {
+  if (previewMeterProc) { try { previewMeterProc.kill('SIGTERM'); } catch {} previewMeterProc = null; }
+}
+ipcMain.handle('meter-preview-start', (event, { deviceName, audioChannels, sampleRate }) => {
+  stopPreviewMeter();
+  if (process.platform !== 'linux' || isStreaming) return { ok: false };
+  const parts = String(audioChannels || '0,1').split(',');
+  const cL = parseInt(parts[0]) || 0, cR = parseInt(parts[1] !== undefined ? parts[1] : parts[0]) || 1;
+  const args = ['-hide_banner', '-loglevel', 'error', '-f', 'pulse', '-ar', String(sampleRate || 48000), '-ac', String(Math.max(2, cL + 1, cR + 1)),
+    '-i', pulseSource(deviceName), ...meterTapArgs(0, `pan=stereo|c0=c${cL}|c1=c${cR}`)];
+  let p;
+  try { p = spawn(findFFmpeg(), args, { stdio: ['ignore', 'pipe', 'pipe'] }); } catch (e) { return { ok: false, error: e.message }; }
+  previewMeterProc = p;
+  attachMeterTap(p, event.sender, 'preview');
+  let err = '';
+  p.stderr.on('data', d => { err = (err + d).slice(-400); });
+  p.on('error', () => {});
+  p.on('close', code => {
+    if (previewMeterProc !== p) return;
+    previewMeterProc = null;
+    if (code) safeSend(event.sender, 'stream-log', { type: 'warn', msg: `Level preview stopped (${err.trim().split('\n').pop() || 'code ' + code})`, tech: true });
+  });
+  return { ok: true };
+});
+ipcMain.handle('meter-preview-stop', () => { stopPreviewMeter(); return { ok: true }; });
+
+// Linux (PipeWire/PulseAudio): ffmpeg needs the source NAME. Until 1.5.0 it got a list position ("0", "1"…), which
+// PipeWire quietly replaces with the default source, so the picked input was ignored.
+function pulseSource(name, fallback) {
+  if (name && name !== 'default' && !/^\d+$/.test(name)) return name;
+  if (fallback && !/^\d+$/.test(String(fallback))) return String(fallback);
+  return 'default';
 }
 let ffmpegProcess = null;
 let isStreaming = false;
@@ -97,7 +215,7 @@ function findFFmpeg() {
 function buildTeeArgs(profiles, quality, audioDevice, videoDevice, audioOnly, volume, audioChannels, audioDeviceName, videoDeviceName, recordingPath, recordingFormat) {
   const platform = process.platform;
   const args = [];
-  const vol = Math.max(0, Math.min(200, volume)) / 100;
+  const vol = Math.max(0, Math.min(100, volume ?? 100)) / 100;
   const parts = (audioChannels || '0,1').split(',');
   const cL = parseInt(parts[0]) || 0;
   const cR = parseInt(parts[1] !== undefined ? parts[1] : parts[0]) || 1;
@@ -113,7 +231,7 @@ function buildTeeArgs(profiles, quality, audioDevice, videoDevice, audioOnly, vo
         '-i', `audio=${audioDeviceName || 'default'}`);
     } else {
       args.push('-f', 'pulse', '-ar', String(nativeSampleRate), '-ac', String(capChannels),
-        '-i', audioDevice || 'default');
+        '-i', pulseSource(audioDeviceName, audioDevice));
     }
   } else {
     if (platform === 'darwin') {
@@ -137,12 +255,15 @@ function buildTeeArgs(profiles, quality, audioDevice, videoDevice, audioOnly, vo
         : ((listV4l2Devices()[0] || {}).path || '/dev/video0');
       args.push('-f', 'v4l2', '-framerate', String(quality.fps || 30), '-i', v4l);
       args.push('-f', 'pulse', '-ar', String(nativeSampleRate), '-ac', String(capChannels),
-        '-i', audioDevice || 'default');
+        '-i', pulseSource(audioDeviceName, audioDevice));
     }
   }
 
   // ── Shared audio filter — reset timestamps to 0 (capture devices start at epoch offset) ──
-  args.push('-af', `asetpts=PTS-STARTPTS,pan=stereo|c0=c${cL}|c1=c${cR},volume=${vol}`);
+  const audioChain = `asetpts=PTS-STARTPTS,pan=stereo|c0=c${cL}|c1=c${cR},volume=${vol}`;
+  // Linux video has the camera as input 0 and PulseAudio as input 1; every other layout has audio on input 0.
+  const tap = meterTapArgs(!audioOnly && platform !== 'win32' && platform !== 'darwin' ? 1 : 0, audioChain);
+  args.push('-af', audioChain);
 
   // ── Shared video encode (reused across all outputs via tee) ──
   if (!audioOnly) {
@@ -205,6 +326,7 @@ function buildTeeArgs(profiles, quality, audioDevice, videoDevice, audioOnly, vo
     // Simple single RTMP output
     const o = otherOutputs[0];
     args.push('-f', 'flv', '-flvflags', 'no_duration_filesize', o.url);
+    args.push(...tap);
     return args;
   }
 
@@ -235,6 +357,7 @@ function buildTeeArgs(profiles, quality, audioDevice, videoDevice, audioOnly, vo
       '-f', 'ogg', '-content_type', 'audio/ogg', url);
   });
 
+  args.push(...tap);
   return args;
 }
 
@@ -261,6 +384,15 @@ async function requestMediaPermissions() {
   }
 }
 
+// Window controls per OS (1.5.0): macOS keeps its real traffic lights over our header, Windows gets its native
+// caption buttons drawn on the dark header, Linux uses the desktop's own frame (Hyprland draws none). Until 1.4.0
+// every OS got a frameless window with Mac-style dots.
+function windowChrome() {
+  if (process.platform === 'darwin') return { titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 16, y: 19 } };
+  if (process.platform === 'win32') return { titleBarStyle: 'hidden', titleBarOverlay: { color: '#080810', symbolColor: '#c8d0f0', height: 52 } };
+  return { frame: true, autoHideMenuBar: true };
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 860,
@@ -268,10 +400,9 @@ function createWindow() {
     minWidth: 760,
     minHeight: 640,
     resizable: true,
-    frame: false,
-    titleBarStyle: 'default',
-    trafficLightPosition: { x: -100, y: -100 },
-    backgroundColor: '#1a1208',
+    title: `Grooveline Broadcaster ${app.getVersion()}`,
+    ...windowChrome(),
+    backgroundColor: '#050508',
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -284,15 +415,13 @@ function createWindow() {
 
   mainWindow.loadFile(path.join(__dirname, 'index.html'));
 
-  // Grant microphone + camera permissions automatically (required in packaged .app)
+  // Grant microphone + camera permissions automatically (required in packaged .app). 'fullscreen' lets the camera
+  // preview go full screen on a double-click (1.5.0): without it Electron quietly refuses requestFullscreen().
+  const allowedPermissions = ['media', 'microphone', 'camera', 'audioCapture', 'videoCapture', 'fullscreen'];
   mainWindow.webContents.session.setPermissionRequestHandler((wc, permission, callback) => {
-    const allowed = ['media', 'microphone', 'camera', 'audioCapture', 'videoCapture'];
-    callback(allowed.includes(permission));
+    callback(allowedPermissions.includes(permission));
   });
-  mainWindow.webContents.session.setPermissionCheckHandler((wc, permission) => {
-    const allowed = ['media', 'microphone', 'camera', 'audioCapture', 'videoCapture'];
-    return allowed.includes(permission);
-  });
+  mainWindow.webContents.session.setPermissionCheckHandler((wc, permission) => allowedPermissions.includes(permission));
 
   if (process.argv.includes('--dev')) {
     mainWindow.webContents.openDevTools({ mode: 'detach' });
@@ -335,6 +464,16 @@ function createTray() {
 
 // ─── App lifecycle ────────────────────────────────────────────────────────────
 app.whenReady().then(() => {
+  openLogFile();
+  writeLog('info', buildLine());
+  // Windows/Linux: no menu bar (Electron's default File/Edit/View showed up under a native frame). macOS keeps the
+  // default app menu: it carries About, Quit and the Edit shortcuts (copy/paste).
+  if (process.platform !== 'darwin') Menu.setApplicationMenu(null);
+  else {
+    const b = buildInfo();
+    app.setAboutPanelOptions({ applicationName: 'Grooveline Broadcaster', applicationVersion: b.version, version: b.commit,
+      copyright: 'MIT licence · grooveline.org', website: 'https://grooveline.org' });
+  }
   // Create window immediately — never await anything before this
   createWindow();
   try { createTray(); } catch(e) {}
@@ -346,11 +485,13 @@ app.on('before-quit', () => {
   // Kill all child processes before window is destroyed — prevents "Object has been destroyed" crash
   pcmProcesses.forEach(p => { try { p.kill('SIGKILL'); } catch {} });
   pcmProcesses = [];
+  stopPreviewMeter();
   if (recordingProcess) { try { recordingProcess.kill('SIGKILL'); } catch {} recordingProcess = null; }
   if (tray) { try { tray.destroy(); } catch {} tray = null; }
 });
 
 app.on('window-all-closed', () => {
+  stopPreviewMeter();
   stopAllStreams();
   if (process.platform !== 'darwin') app.quit();
 });
@@ -549,7 +690,7 @@ function giveUp(stage) {
   const sender = s.sender;
   endLiveSession();
   isStreaming = false;
-  safeSend(sender, 'stream-stopped', { reason: why });
+  safeSend(sender, 'stream-stopped', { reason: why, stage });
 }
 
 // Server-side truth. ffmpeg's own progress can't see a dead network path for
@@ -669,7 +810,7 @@ function startSoxStream(event, profile, quality, deviceName, audioChannels, volu
   const label = profile.name || profile.type;
   const sampleRate = quality.audioSampleRate || 44100;
   const bitrate = quality.audioBitrate || '320k';
-  const vol = Math.max(0, Math.min(200, volume)) / 100;
+  const vol = Math.max(0, Math.min(100, volume ?? 100)) / 100;
 
   // Parse channel selection
   const parts = (audioChannels || '0,1').split(',');
@@ -700,11 +841,12 @@ function startSoxStream(event, profile, quality, deviceName, audioChannels, volu
     '-f', 'ogg', '-content_type', 'audio/ogg',
     '-reconnect', '1',             // auto-reconnect on network drop
     '-reconnect_delay_max', '5',   // wait max 5s before reconnect
-    url
+    url,
+    ...meterTapArgs(0, `pan=stereo|c0=c${cL}|c1=c${cR},volume=${vol}`),
   ];
 
-  safeSend(event.sender, 'stream-log', { type: 'info', msg: `Starting ${label} (CoreAudio via sox) — device: "${deviceName}"` });
-  safeSend(event.sender, 'stream-log', { type: 'info', msg: `CMD: sox ${soxArgs.join(' ')} | ffmpeg ${ffmpegArgs.join(' ')}` });
+  safeSend(event.sender, 'stream-log', { type: 'info', msg: `Starting ${label} (CoreAudio via sox) — device: "${deviceName}"`, tech: true });
+  safeSend(event.sender, 'stream-log', { type: 'info', msg: `CMD: sox ${soxArgs.join(' ')} | ffmpeg ${ffmpegArgs.join(' ')}`, tech: true });
 
   // Spawn sox
   const soxProc = tagProc(spawn(sox, soxArgs));
@@ -713,10 +855,11 @@ function startSoxStream(event, profile, quality, deviceName, audioChannels, volu
 
   // Pipe sox stdout → ffmpeg stdin
   soxProc.stdout.pipe(ffmpegProc.stdin);
+  attachMeterTap(ffmpegProc, event.sender);
 
   soxProc.stderr.on('data', d => {
     const line = d.toString().trim();
-    if (line) safeSend(event.sender, 'stream-log', { type: 'info', msg: `[sox] ${line}` });
+    if (line) safeSend(event.sender, 'stream-log', { type: 'info', msg: `[sox] ${line}`, tech: true });
     if (line) superviseLine(soxProc, line);
   });
 
@@ -728,19 +871,19 @@ function startSoxStream(event, profile, quality, deviceName, audioChannels, volu
         const match = line.match(/bitrate=\s*([\d.]+)kbits/);
         safeSend(event.sender, 'stream-stats', { label, bitrate: match ? match[1] : null, raw: line });
       } else if (line.includes('Error') || line.includes('error') || line.includes('failed')) {
-        safeSend(event.sender, 'stream-log', { type: 'error', msg: `[${label}] ${line}` });
+        safeSend(event.sender, 'stream-log', { type: 'error', msg: `[${label}] ${line}`, tech: true });
       } else if (line.includes('Audio:') || line.includes('Stream #')) {
-        safeSend(event.sender, 'stream-log', { type: 'info', msg: `[${label}] ${line}` });
+        safeSend(event.sender, 'stream-log', { type: 'info', msg: `[${label}] ${line}`, tech: true });
       }
     });
   });
 
-  soxProc.on('error', e => safeSend(event.sender, 'stream-log', { type: 'error', msg: `[sox] ${e.message}` }));
-  ffmpegProc.on('error', e => safeSend(event.sender, 'stream-log', { type: 'error', msg: `[ffmpeg] ${e.message}` }));
+  soxProc.on('error', e => safeSend(event.sender, 'stream-log', { type: 'error', msg: `[sox] ${e.message}`, tech: true }));
+  ffmpegProc.on('error', e => safeSend(event.sender, 'stream-log', { type: 'error', msg: `[ffmpeg] ${e.message}`, tech: true }));
 
   soxProc.on('close', (code) => {
     if (isStreaming && !(liveSession && (soxProc._gen !== liveSession.gen || liveSession.tearingDown))) {
-      safeSend(event.sender, 'stream-log', { type: 'error', msg: `[sox] Exited (code ${code}) — audio device "${deviceName}" may not be available. Check device name in Settings.` });
+      safeSend(event.sender, 'stream-log', { type: 'error', msg: `[sox] Exited (code ${code}): the input "${deviceName}" may not be available.`, tech: true });
       if (liveSession) { liveSession.stage = 'device'; liveSession.lastLine = `sox exited (code ${code})`; }
       // sox dying closes the pipe → ffmpeg will exit too; kill it explicitly to be clean
       try { ffmpegProc.kill('SIGTERM'); } catch {}
@@ -754,7 +897,7 @@ function startSoxStream(event, profile, quality, deviceName, audioChannels, volu
     if (idx2 > -1) activeProcesses.splice(idx2, 1);
     if (pipelineExited(ffmpegProc, code)) return;
     if (isStreaming) {
-      safeSend(event.sender, 'stream-log', { type: code === 0 ? 'info' : 'error', msg: `[${label}] Stream ended (code ${code})` });
+      safeSend(event.sender, 'stream-log', { type: code === 0 ? 'info' : 'error', msg: `[${label}] Stream ended (code ${code})`, tech: true });
       if (activeProcesses.filter(p => !p.killed).length === 0) {
         isStreaming = false;
         safeSend(event.sender, 'stream-stopped', {});
@@ -763,7 +906,7 @@ function startSoxStream(event, profile, quality, deviceName, audioChannels, volu
   });
 
   activeProcesses.push(soxProc, ffmpegProc);
-  safeSend(event.sender, 'stream-log', { type: 'success', msg: `✓ ${label} stream started` });
+  safeSend(event.sender, 'stream-log', { type: 'success', msg: `✓ ${label} stream started`, tech: true });
   return { soxProc, ffmpegProc };
 }
 
@@ -775,7 +918,7 @@ let videoSoxProc = null;    // sox process piping audio to ffmpeg fd3
 function startVideoStream(event, ffmpeg, profiles, quality, audioDeviceName, volume, audioChannels) {
   const sox = findSox();
   const fps = quality.fps || 30;
-  const vol = Math.max(0, Math.min(200, volume)) / 100;
+  const vol = Math.max(0, Math.min(100, volume ?? 100)) / 100;
   const parts = (audioChannels || '0,1').split(',');
   const cL = parseInt(parts[0]) || 0;
   const cR = parseInt(parts[1] !== undefined ? parts[1] : parts[0]) || 1;
@@ -817,6 +960,7 @@ function startVideoStream(event, ffmpeg, profiles, quality, audioDeviceName, vol
     const url = `icecast://${iceUser}:${p.password || 'hackme'}@${serverWithPort}${p.mount || '/stream'}`;
     args.push('-map', '1:a', '-c:a', 'libvorbis', '-q:a', '6', '-ar', '44100', '-ac', '2', '-f', 'ogg', '-content_type', 'audio/ogg', url);
   });
+  args.push(...meterTapArgs(1, `pan=stereo|c0=c${cL}|c1=c${cR},volume=${vol}`));
 
   // sox: CoreAudio → raw s16le PCM to stdout (capture enough channels for selected pair)
   const soxArgs = [
@@ -825,8 +969,8 @@ function startVideoStream(event, ffmpeg, profiles, quality, audioDeviceName, vol
     '-t', 'raw', '-r', String(sampleRate), '-e', 'signed', '-b', '16', '-c', String(soxChannels), '-'
   ];
 
-  safeSend(event.sender, 'stream-log', { type: 'info', msg: `Starting sox — device: "${audioDeviceName}"` });
-  safeSend(event.sender, 'stream-log', { type: 'info', msg: `CMD: ffmpeg ${args.join(' ')}` });
+  safeSend(event.sender, 'stream-log', { type: 'info', msg: `Starting sox — device: "${audioDeviceName}"`, tech: true });
+  safeSend(event.sender, 'stream-log', { type: 'info', msg: `CMD: ffmpeg ${args.join(' ')}`, tech: true });
 
   // Spawn sox first
   const soxProc = spawn(sox, soxArgs);
@@ -835,9 +979,9 @@ function startVideoStream(event, ffmpeg, profiles, quality, audioDeviceName, vol
 
   soxProc.stderr.on('data', d => {
     const line = d.toString().trim();
-    if (line) safeSend(event.sender, 'stream-log', { type: 'info', msg: `[sox] ${line}` });
+    if (line) safeSend(event.sender, 'stream-log', { type: 'info', msg: `[sox] ${line}`, tech: true });
   });
-  soxProc.on('error', e => safeSend(event.sender, 'stream-log', { type: 'error', msg: `[sox] ${e.message}` }));
+  soxProc.on('error', e => safeSend(event.sender, 'stream-log', { type: 'error', msg: `[sox] ${e.message}`, tech: true }));
   soxProc.on('close', (code) => {
     const idx = activeProcesses.indexOf(soxProc);
     if (idx > -1) activeProcesses.splice(idx, 1);
@@ -861,6 +1005,7 @@ function startVideoStream(event, ffmpeg, profiles, quality, audioDeviceName, vol
 
   // Pipe sox stdout → ffmpeg fd3
   soxProc.stdout.pipe(proc.stdio[3]);
+  attachMeterTap(proc, event.sender);
 
   proc.stderr.on('data', (data) => {
     const lines = data.toString().split('\n').filter(l => l.trim());
@@ -869,9 +1014,9 @@ function startVideoStream(event, ffmpeg, profiles, quality, audioDeviceName, vol
         const match = line.match(/bitrate=\s*([\d.]+)kbits/);
         safeSend(event.sender, 'stream-stats', { bitrate: match ? match[1] : null });
       } else if (line.match(/error|Error|failed|Broken pipe/i) && !line.includes('Qavg')) {
-        safeSend(event.sender, 'stream-log', { type: 'error', msg: line });
+        safeSend(event.sender, 'stream-log', { type: 'error', msg: line, tech: true });
       } else if (line.includes('Stream #') || line.includes('Output #')) {
-        safeSend(event.sender, 'stream-log', { type: 'info', msg: line });
+        safeSend(event.sender, 'stream-log', { type: 'info', msg: line, tech: true });
       }
     });
   });
@@ -884,7 +1029,7 @@ function startVideoStream(event, ffmpeg, profiles, quality, audioDeviceName, vol
       safeSend(event.sender, 'stream-stopped', {});
     }
   });
-  safeSend(event.sender, 'stream-log', { type: 'success', msg: '✓ Video stream started (sox audio + canvas video)' });
+  safeSend(event.sender, 'stream-log', { type: 'success', msg: '✓ Video stream started (sox audio + canvas video)', tech: true });
   return proc;
 }
 
@@ -907,8 +1052,10 @@ function spawnFFmpeg(event, ffmpeg, args) {
     cmd = 'nice';
     spawnArgs = ['-n', '-10', ffmpeg, ...args];
   }
+  safeSend(event.sender, 'stream-log', { type: 'info', msg: `CMD: ffmpeg ${args.join(' ')}`, tech: true });
   const proc = tagProc(spawn(cmd, spawnArgs, { stdio: ['ignore', 'pipe', 'pipe'] }));
   activeProcesses.push(proc);
+  attachMeterTap(proc, event.sender);
   proc.stderr.on('data', (data) => {
     const lines = data.toString().split(/[\r\n]+/).filter(l => l.trim());
     lines.forEach(line => {
@@ -917,9 +1064,9 @@ function spawnFFmpeg(event, ffmpeg, args) {
         const match = line.match(/bitrate=\s*([\d.]+)kbits/);
         safeSend(event.sender, 'stream-stats', { bitrate: match ? match[1] : null });
       } else if (line.match(/error|Error|failed|Broken pipe/i) && !line.includes('Qavg')) {
-        safeSend(event.sender, 'stream-log', { type: 'error', msg: line });
+        safeSend(event.sender, 'stream-log', { type: 'error', msg: line, tech: true });
       } else if (line.includes('Stream #') || line.includes('Output #')) {
-        safeSend(event.sender, 'stream-log', { type: 'info', msg: line });
+        safeSend(event.sender, 'stream-log', { type: 'info', msg: line, tech: true });
       }
     });
   });
@@ -932,12 +1079,13 @@ function spawnFFmpeg(event, ffmpeg, args) {
       safeSend(event.sender, 'stream-stopped', {});
     }
   });
-  safeSend(event.sender, 'stream-log', { type: 'success', msg: '✓ Stream started' });
+  safeSend(event.sender, 'stream-log', { type: 'success', msg: '✓ Stream started', tech: true });
   return proc;
 }
 
 ipcMain.handle('start-stream', async (event, opts) => {
   if (isStreaming) return { ok: false, error: 'Already streaming' };
+  stopPreviewMeter();
   const activeProfiles = opts.profiles.filter(p => p.enabled);
   if (activeProfiles.length === 0) return { ok: false, error: 'No destinations enabled' };
   // Grooveline only, one destination per show (1.4.0): the radio (Icecast) or the video server (MediaMTX).
@@ -954,7 +1102,7 @@ ipcMain.handle('start-stream', async (event, opts) => {
   if (opts.soundCheck) {
     const p = activeProfiles[0];
     if (activeProfiles.length !== 1 || p.type !== 'icecast' || !/^\/check-[a-z0-9-]+$/i.test(p.mount || '')) {
-      return { ok: false, error: 'Sound check refused: it only streams to your private test mount.' };
+      return { ok: false, error: 'Stream check refused: it only streams to your private test mount.' };
     }
     opts.profiles = [p];
     opts.audioOnly = true;
@@ -1086,7 +1234,7 @@ ipcMain.handle('start-pcm-stream', async (event, { profiles, quality, volume, au
 
   const sampleRate = quality.audioSampleRate || 44100;
   const bitrate = quality.audioBitrate || '320k';
-  const vol = Math.max(0, Math.min(200, volume || 100)) / 100;
+  const vol = Math.max(0, Math.min(100, volume ?? 100)) / 100;
 
   // Parse channel selection
   const parts = (audioChannels || '0,1').split(',');
@@ -1200,7 +1348,8 @@ ipcMain.handle('start-recording', async (event, { format, folder, mode, sampleRa
   if (recWriteStream || recFfmpegProc) return { ok: false, error: 'Already recording' };
   recFormat2 = format || 'aac';
   recMode = mode || 'webm';
-  recSampleRate = sampleRate || 44100;
+  // Live recording ('pcm') is fed by the meter tap, which is always 44.1 kHz float stereo (1.5.0).
+  recSampleRate = recMode === 'pcm' ? TAP_RATE : (sampleRate || 44100);
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
   const ext = recFormat2 === 'wav' ? 'wav' : recFormat2 === 'mp4' ? 'mp4' : 'aac';
   recOutPath = path.join(folder, `grooveline-rec-${timestamp}.${ext}`);
@@ -1300,10 +1449,10 @@ ipcMain.handle('start-recording', async (event, { format, folder, mode, sampleRa
   }
 
   if (recMode === 'pcm') {
-    // Live mode: pipe PCM chunks directly into ffmpeg → output file
+    // Live mode (1.5.0): the meter tap's 16-bit PCM (attachMeterTap) → ffmpeg → output file
     const ffmpeg = findFFmpeg();
     const ffArgs = [
-      '-f', 'f32le', '-ar', String(recSampleRate), '-ac', '2', '-i', 'pipe:0',
+      '-f', 's16le', '-ar', String(recSampleRate), '-ac', '2', '-i', 'pipe:0',
     ];
     if (recFormat2 === 'wav') {
       ffArgs.push('-c:a', 'pcm_s16le', '-ar', '44100', '-ac', '2');
@@ -1419,10 +1568,7 @@ ipcMain.handle('stop-recording', () => {
 ipcMain.on('pcm-chunk', (_, buffer) => {
   try {
     const buf = buffer instanceof Buffer ? buffer : Buffer.from(buffer);
-    // Tap into live recording if active in pcm mode
-    if (recWriteStream && recMode === 'pcm' && recFfmpegProc && !recFfmpegProc.stdin.destroyed) {
-      try { recFfmpegProc.stdin.write(buf); } catch {}
-    }
+    // (Live recording is fed by the meter tap since 1.5.0, not by these float chunks.)
     pcmProcesses.forEach(proc => {
       try { if (proc.stdin && !proc.stdin.destroyed) proc.stdin.write(buf); } catch {}
     });
@@ -1732,6 +1878,84 @@ ipcMain.handle('open-external', (_, url) => {
   require('electron').shell.openExternal(url);
 });
 
+// ─── App info, log file, changelog, update check (1.5.0) ──────────────────────
+function toolVersion(cmd, args) {
+  return new Promise(resolve => {
+    let out = '';
+    try {
+      const p = spawn(cmd, args);
+      p.stdout.on('data', d => { out += d; }); p.stderr.on('data', d => { out += d; });
+      p.on('close', () => resolve(out.split('\n').find(l => l.trim()) || null));
+      p.on('error', () => resolve(null));
+      setTimeout(() => { try { p.kill(); } catch {} }, 4000);
+    } catch { resolve(null); }
+  });
+}
+
+ipcMain.handle('get-app-info', async () => {
+  const b = buildInfo();
+  const ffmpeg = await toolVersion(findFFmpeg(), ['-version']);
+  const sox = process.platform === 'darwin' ? await toolVersion(findSox(), ['--version']) : null;
+  return {
+    ...b, line: buildLine(), os: OS_NAME, platform: process.platform, osRelease: os.release(), arch: process.arch,
+    electron: process.versions.electron, chrome: process.versions.chrome, node: process.versions.node,
+    ffmpeg: ffmpeg ? ffmpeg.replace(/ Copyright.*$/, '') : null, ffmpegBundled: findFFmpeg() !== 'ffmpeg' && findFFmpeg() !== 'ffmpeg.exe',
+    sox: sox ? sox.replace(/^.*SoX v/, 'SoX v') : null, logsDir: logsDir(),
+  };
+});
+
+ipcMain.on('log-write', (_, { type, msg, tech }) => writeLog(type, msg, tech));
+
+ipcMain.handle('log-save', async () => {
+  const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-');
+  const r = await dialog.showSaveDialog(mainWindow, { title: 'Save log', defaultPath: path.join(app.getPath('documents'), `grooveline-broadcaster-${stamp}.log`) });
+  if (r.canceled || !r.filePath) return { ok: false };
+  try {
+    // This session first, then the one before (a crash or a restart often matters).
+    const prev = path.join(logsDir(), 'broadcaster.1.log');
+    let text = logFile && fs.existsSync(logFile) ? fs.readFileSync(logFile, 'utf8') : '';
+    if (fs.existsSync(prev)) text += '\n── previous session ──\n' + fs.readFileSync(prev, 'utf8');
+    fs.writeFileSync(r.filePath, maskSecrets(text));
+    return { ok: true, path: r.filePath };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('log-open-folder', () => require('electron').shell.openPath(logsDir()));
+
+// CHANGELOG.md ships inside the app; the renderer shows its own version's section as "What's new".
+ipcMain.handle('get-changelog', () => {
+  try { return fs.readFileSync(path.join(__dirname, '..', 'CHANGELOG.md'), 'utf8'); } catch { return ''; }
+});
+
+// Update check: https://downloads.grooveline.org/latest.json, e.g.
+//   { "latest": { "linux": "1.5.0", "win32": "1.3.0", "darwin": "1.0.6" }, "url": "https://grooveline.org/broadcast" }
+// or { "version": "1.5.0", "url": … } for all systems. Missing file or no network → { ok: false }, the app says nothing.
+const newerThan = (a, b) => {
+  const pa = String(a).split(/[.-]/).map(n => parseInt(n) || 0), pb = String(b).split(/[.-]/).map(n => parseInt(n) || 0);
+  for (let i = 0; i < 3; i++) { if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) > (pb[i] || 0); }
+  return false;
+};
+ipcMain.handle('check-update', () => new Promise(resolve => {
+  const https = require('https');
+  const req = https.get('https://downloads.grooveline.org/latest.json', { timeout: 6000, headers: { 'User-Agent': `GroovelineBroadcaster/${app.getVersion()}` } }, res => {
+    if (res.statusCode !== 200) { res.resume(); return resolve({ ok: false, status: res.statusCode }); }
+    let body = '';
+    res.setEncoding('utf8');
+    res.on('data', d => { body += d; if (body.length > 1e5) req.destroy(); });
+    res.on('end', () => {
+      try {
+        const j = JSON.parse(body);
+        const latest = (j.latest && j.latest[process.platform]) || j.version;
+        if (!latest) return resolve({ ok: false });
+        resolve({ ok: true, latest: String(latest), current: app.getVersion(), newer: newerThan(latest, app.getVersion()),
+          url: /^https:\/\//.test(j.url || '') ? j.url : 'https://grooveline.org/broadcast' });
+      } catch { resolve({ ok: false }); }
+    });
+  });
+  req.on('timeout', () => req.destroy(new Error('timeout')));
+  req.on('error', () => resolve({ ok: false }));
+}));
+
 // ─── Grooveline API proxy (renderer fetch is blocked by Electron security) ───
 function apiRequest(method, path, body, token) {
   return new Promise((resolve, reject) => {
@@ -1898,23 +2122,40 @@ ipcMain.handle('list-audio-devices', async () => {
   // ── Windows: DirectShow ───────────────────────────────────────────────────────
   if (platform === 'win32') return listDshowDevices();
 
-  // ── Linux: ALSA/PulseAudio ───────────────────────────────────────────────────
+  // ── Linux: PipeWire/PulseAudio ───────────────────────────────────────────────
+  // `pactl list sources` (LC_ALL=C: the field names are translated otherwise) gives each source's name, which is
+  // what ffmpeg -f pulse needs, and its description, which is the label Chromium shows. Monitors ("Monitor of …")
+  // capture what an output plays.
   return new Promise((resolve) => {
-    const proc = spawn('pactl', ['list', 'short', 'sources']);
+    const proc = spawn('pactl', ['list', 'sources'], { env: { ...process.env, LC_ALL: 'C' } });
     let stdout = '';
     proc.stdout.on('data', d => { stdout += d.toString(); });
     proc.on('close', () => {
-      const devices = stdout.split('\n')
-        .filter(l => l.trim())
-        .map((line, i) => {
-          const parts = line.split('\t');
-          return { index: i, name: parts[1] || parts[0] || `device${i}` };
-        });
-      resolve({ devices, videoDevices: listV4l2Devices() });
+      // "Default Source:" names what the "Default input" option streams.
+      const info = spawn('pactl', ['info'], { env: { ...process.env, LC_ALL: 'C' } });
+      let txt = '';
+      info.stdout.on('data', d => { txt += d; });
+      const done = () => resolve({ devices: parsePactlSources(stdout), videoDevices: listV4l2Devices(), defaultName: ((txt.match(/^Default Source:\s*(.+)$/m) || [])[1] || '').trim() });
+      info.on('close', done); info.on('error', done);
     });
-    proc.on('error', () => resolve({ devices: [{ index: 0, name: 'default' }], videoDevices: listV4l2Devices() }));
+    proc.on('error', () => resolve({ devices: [{ index: 0, name: 'default', description: 'Default input' }], videoDevices: listV4l2Devices() }));
   });
 });
+
+function parsePactlSources(text) {
+  return text.split(/^Source #/m).slice(1).map((block, i) => {
+    const get = re => (block.match(re) || [])[1];
+    const spec = get(/^\s*Sample Specification:\s*(.+)$/m) || '';
+    return {
+      index: i,
+      name: (get(/^\s*Name:\s*(.+)$/m) || '').trim(),
+      description: (get(/^\s*Description:\s*(.+)$/m) || '').trim(),
+      channels: parseInt((spec.match(/(\d+)ch/) || [])[1]) || 2,
+      rate: parseInt((spec.match(/(\d+)Hz/) || [])[1]) || 48000,
+      monitor: (get(/^\s*Monitor of Sink:\s*(\S+)/m) || 'n/a') !== 'n/a',
+    };
+  }).filter(d => d.name);
+}
 
 // Raw file read for diagnostics — shows exact bytes in the file
 ipcMain.handle('read-np-file-raw', async (_, filePath) => {

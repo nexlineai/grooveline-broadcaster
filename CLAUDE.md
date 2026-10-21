@@ -69,15 +69,15 @@ torn down and relaunched with backoff 2/4/8/15/30 s.
   connection holds the mount until Icecast's source-timeout (600 s on Grooveline).
 - 401 / audio device / encoder: give up after 3 in a row (`stream-stopped` with a reason).
 - The macOS canvas-video path is not supervised (webm can't restart mid-stream).
-- Renderer shows `RECONNECTING (n) ↻ Xs` via `stream-reconnecting` / `stream-reconnected`.
+- Renderer shows RECONNECTING with a banner (stage text + How to fix) via `stream-reconnecting` / `stream-reconnected`.
 - Reports to `POST /setup/report` (app_live, app_error, app_reconnecting,
   app_reconnected, app_gave_up) when the DJ is logged in (`_acctToken` in config).
 - `maskSecrets()` in `safeSend` masks `icecast://user:<pw>@` and RTMP keys in
   everything sent to the log — never log a raw URL around it.
 
-### In-app sound check (1.3.0, 20 Oct 2026)
+### In-app stream check (1.3.0 "sound check", renamed Stream check in 1.5.0)
 
-**◎ SOUND CHECK** under GO LIVE opens `#check-modal`: sign in (reuses `acctLogin`)
+The **Stream check** card on ON AIR (or the strip button): sign in (`acctLogin`)
 → START. `GET /check/mount` (IPC `api-check-mount`) gives the DJ's private
 `/check-*` mount, the same one the website's sound check uses. The answer comes
 from `GET /check/status` (our Icecast), polled every 3 s, never from ffmpeg.
@@ -85,7 +85,7 @@ from `GET /check/status` (our Icecast), polled every 3 s, never from ffmpeg.
   It is **never saved into `cfg`**, and the DJ's own destinations are ignored for the run.
 - `main.js` refuses `soundCheck: true` unless there is exactly one Icecast profile on
   `/^\/check-[a-z0-9-]+$/` (forced audio-only). This guard keeps a test off a public mount.
-- Status reads `TESTING (private) ●`. `reportSetup` details are prefixed `sound check:`.
+- Status reads STREAM CHECK. `reportSetup` details keep the prefix `sound check:` (telemetry, unchanged).
 - LISTEN plays `https://<server>/<mount>` in the app. The hint says headphones only,
   and never with a virtual cable as the system output.
 - 401 within `AUTH_GRACE_MS` retries every 5 s: a new mount needs the 1-min sync.
@@ -138,7 +138,38 @@ from `GET /check/status` (our Icecast), polled every 3 s, never from ffmpeg.
 - Linux — system ffmpeg from PATH, no bundling
 - `findFFmpeg()` checks `process.resourcesPath` first (production), then PATH (dev)
 
-## Current Blocker — Video Streaming (2026-04-09)
+### 1.5.0 redesign (21–22 Oct 2026)
+- **Layout:** header (brand, version chip → About, status pill, account), tabs ON AIR / RECORDING / NOW PLAYING / LOG /
+  HELP / SETTINGS, and an always-visible right strip (status, L/R meters, volume fader, GO LIVE, Stream check, REC).
+  ON AIR = your slot → your input → Stream check. The Destinations tab is gone: the next booking loads by itself
+  after sign-in (`acctFetchBookings` → `acctLoadCredentialsFromBooking`); hand entry is Settings › Advanced.
+  `refreshUI()` decides every status text, banner and button from the state; call it after changing state.
+- **Harness ids kept on purpose:** `log-output`, `stat-status`, `btn-go-live`, `video-row`, `video-device`, `dest-list`,
+  `acct-load-msg`, `chk-*`, and the functions `toggleLive`, `pickShow`, `startAppCheck`, `endAppCheck`, `openCheckModal`,
+  `acctFetchBookings`, `acctLoadCredentials`, `setLive`, `showAddMenu`. The harnesses in `~/.local/share/gl-testing/`
+  (outside the repo) use them, and the boot log line must still contain "Ready.".
+- **Meters:** while live, every ffmpeg command ends with `meterTapArgs()`: the stream's own audio chain (pair + volume)
+  as 16-bit 44.1 kHz stereo on stdout. `attachMeterTap()` computes peak/RMS per 1470 frames and sends `meter` IPC at
+  30 Hz; it also feeds live recording (`recMode 'pcm'`). **stdout must always be drained**, or ffmpeg blocks and the
+  supervisor loops on stalls. Linux video has audio on input 1 (`-map 1:a?`).
+  Before going live: Linux runs a meter-only ffmpeg on the exact Pulse/PipeWire source (`meter-preview-start`; Chromium
+  can't open monitors); Windows/macOS use Web Audio with the same pair and volume. Scale: dBFS −60…0, IEC-style.
+- **Linux input:** ffmpeg gets the Pulse/PipeWire source *name* (`pulseSource()`). Until 1.5.0 it got a list position,
+  which PipeWire silently replaces with the default source. `findFfDevice()` matches labels exactly first and never
+  maps a non-monitor label to a monitor.
+- **Volume:** 0–100 % (`?? 100`, never `|| 100`), locked while live: ffmpeg gets it at launch only.
+- **Build info:** `scripts/stamp-build.js` is electron-builder's `beforePack` hook and writes `src/build-info.json`
+  (gitignored): commit from `GITHUB_SHA`, else git, else `build/commit.txt` (filled by `git archive`, export-subst).
+- **Logs:** `<userData>/logs/broadcaster.log` + 4 previous sessions, written by `writeLog()` in main (every
+  `stream-log`, plus renderer lines via `log-write`), masked. `tech: true` marks raw ffmpeg lines (Technical view).
+- **About / What's new / updates:** `get-app-info`, `get-changelog` (CHANGELOG.md is packaged), `check-update` reads
+  `https://downloads.grooveline.org/latest.json` (`{"latest":{"linux":"x","win32":"y","darwin":"z"},"url":…}`); a
+  missing file is silent.
+- **Window:** macOS `hiddenInset`, Windows `titleBarOverlay`, Linux native frame with no menu bar. The session
+  permission handler must allow `fullscreen`, or the camera preview's double-click full screen is refused silently.
+
+## Historical: video streaming blocker (2026-04-09)
+This is about the macOS canvas path and predates the supervisor; re-check before relying on it.
 
 **URGENT:** Video RTMP streaming crashes after 2-5 minutes with `[vost#0:0/libx264] Error submitting a packet to the muxer: End of file` → `Broken pipe`. Audio-only Icecast is **stable**. 
 

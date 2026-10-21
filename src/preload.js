@@ -58,4 +58,15 @@ contextBridge.exposeInMainWorld('grooveline', {
   apiCredentials: (opts) => ipcRenderer.invoke('api-credentials', opts),
   apiCheckMount: (opts) => ipcRenderer.invoke('api-check-mount', opts),
   apiCheckStatus: (opts) => ipcRenderer.invoke('api-check-status', opts),
+
+  // 1.5.0: build info, log file, changelog, update check, live level meters
+  getAppInfo: () => ipcRenderer.invoke('get-app-info'),
+  logWrite: (entry) => ipcRenderer.send('log-write', entry),
+  logSave: () => ipcRenderer.invoke('log-save'),
+  logOpenFolder: () => ipcRenderer.invoke('log-open-folder'),
+  getChangelog: () => ipcRenderer.invoke('get-changelog'),
+  checkUpdate: () => ipcRenderer.invoke('check-update'),
+  onMeter: (cb) => ipcRenderer.on('meter', (_, data) => cb(data)),
+  meterPreviewStart: (opts) => ipcRenderer.invoke('meter-preview-start', opts),
+  meterPreviewStop: () => ipcRenderer.invoke('meter-preview-stop'),
 });

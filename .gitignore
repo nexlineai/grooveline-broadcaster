@@ -3,3 +3,4 @@ dist/
 bin/
 *.bak
 .DS_Store
+src/build-info.json

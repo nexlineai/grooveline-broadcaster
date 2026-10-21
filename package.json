@@ -1,6 +1,6 @@
 {
   "name": "grooveline-broadcaster",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "description": "Grooveline Radio — Live Streaming Broadcaster",
   "main": "src/main.js",
   "author": "Grooveline Radio",
@@ -30,7 +30,8 @@
     "files": [
       "src/**/*",
       "assets/**/*",
-      "package.json"
+      "package.json",
+      "CHANGELOG.md"
     ],
     "win": {
       "target": [
@@ -147,7 +148,10 @@
       "maintainer": "Grooveline <info@grooveline.org>",
       "synopsis": "Stream your DJ set live to Grooveline Radio",
       "description": "Capture your DJ audio (PulseAudio/PipeWire) and stream it to Grooveline. Uses the system ffmpeg.",
-      "artifactName": "Grooveline-Broadcaster-${version}-${arch}.${ext}"
+      "artifactName": "Grooveline-Broadcaster-${version}-${arch}.${ext}",
+      "desktop": {
+        "Comment": "Stream your DJ set live to Grooveline Radio"
+      }
     },
     "deb": {
       "depends": [
@@ -164,6 +168,7 @@
         "pulseaudio-utils | pipewire-pulse"
       ]
     },
-    "publish": null
+    "publish": null,
+    "beforePack": "scripts/stamp-build.js"
   }
 }
