@@ -566,6 +566,7 @@ let appCheck = null; // running stream check: { mount, host, profile, poll, rece
 let previewStream = null, audioCtx = null, gainNode = null, previewPairMissing = false;
 let previewAnalysers = null;     // [analyserL, analyserR] on the picked pair, after the volume
 let previewTapOn = false;        // Linux: the preview levels come from an ffmpeg meter on the exact source (main.js)
+let previewNoLevel = false;      // Windows/macOS: the input is one only ffmpeg lists; Chromium can't meter it
 let platform = '', appInfo = null, changelog = '', updateInfo = null, whatsNewOpen = false;
 let canvasCapStream = null, canvasCapVideo = null, canvasCapCtx = null, canvasCapCanvas = null, canvasCapAF = null;
 const $ = id => document.getElementById(id);
@@ -887,7 +888,7 @@ const pair = () => { const p = String(cfg.audioChannels || '0,1').split(','); co
 function teardown() {
   if (previewTapOn) { previewTapOn = false; window.grooveline.meterPreviewStop(); }
   if (audioCtx) { audioCtx.close().catch(()=>{}); audioCtx = null; gainNode = null; }
-  previewAnalysers = null; previewPairMissing = false;
+  previewAnalysers = null; previewPairMissing = false; previewNoLevel = false;
   const vid = $('preview-video');
   // Null srcObject BEFORE stopping tracks — forces Chromium to release the camera immediately
   if (!canvasCapStream) { vid.srcObject = null; vid.style.display = 'none'; $('preview-ph').style.display = ''; }
@@ -987,7 +988,10 @@ async function startPreview() {
   } else if (!cfg.audioOnly) $('preview-ph').textContent = 'No camera found';
 
   const at = previewStream.getAudioTracks()[0];
-  if (at) {
+  // An input only ffmpeg lists (a macOS aggregate device, an unmatched dshow name): Chromium opened its default device
+  // instead, so its level would be the wrong input. Show none; Stream check and live show the real one.
+  if (at && audioId.startsWith('ffmpeg:')) previewNoLevel = true;
+  else if (at) {
     audioCtx = new AudioContext({ latencyHint: 'interactive' });
     const src = audioCtx.createMediaStreamSource(previewStream);
     const nCh = Math.max(1, (at.getSettings && at.getSettings().channelCount) || 2);
@@ -1141,6 +1145,7 @@ function refreshUI() {
   $('m-hint').textContent = isLive
     ? 'Volume is set before GO LIVE. During the show, use your mixer\'s master.'
     : previewPairMissing ? `This computer gives the app only 2 channels here. The level of ${$('audio-channels').selectedOptions[0]?.textContent || 'this pair'} shows during Stream check and live.`
+    : previewNoLevel ? 'The level of this input shows during Stream check and live.'
     : 'Peaks between −12 and −3 are right. CLIP means too loud: turn your mixer down.';
   $('audio-device').disabled = isLive; $('audio-channels').disabled = isLive; $('video-device').disabled = isLive; $('refresh-btn').disabled = isLive;
   $('in-r').textContent = isLive ? 'locked while live' : '';
