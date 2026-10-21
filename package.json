@@ -1,0 +1,169 @@
+{
+  "name": "grooveline-broadcaster",
+  "version": "1.3.0",
+  "description": "Grooveline Radio — Live Streaming Broadcaster",
+  "main": "src/main.js",
+  "author": "Grooveline Radio",
+  "homepage": "https://grooveline.org",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev",
+    "dist:mac": "electron-builder --mac dmg",
+    "build:win": "electron-builder --win nsis",
+    "prepare-binaries-win": "node scripts/download-binaries-win.js",
+    "build:linux": "electron-builder --linux",
+    "build:all": "electron-builder --mac --win --linux",
+    "prepare-binaries": "node scripts/download-binaries.js"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "electron": "^28.0.0",
+    "electron-builder": "^24.9.1"
+  },
+  "build": {
+    "appId": "org.grooveline.broadcaster",
+    "productName": "Grooveline Broadcaster",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "src/**/*",
+      "assets/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "assets/icon.ico",
+      "requestedExecutionLevel": "asInvoker",
+      "extraResources": [
+        {
+          "from": "bin/win/",
+          "to": ".",
+          "filter": [
+            "ffmpeg.exe"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "allowElevation": true,
+      "installerIcon": "assets/icon.ico",
+      "uninstallerIcon": "assets/icon.ico",
+      "installerHeaderIcon": "assets/icon.ico",
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Grooveline Broadcaster",
+      "installerSidebar": "assets/dmg-background.png"
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ],
+      "category": "public.app-category.music",
+      "icon": "assets/icon.icns",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "Grooveline Broadcaster needs microphone access to capture audio for live streaming.",
+        "NSCameraUsageDescription": "Grooveline Broadcaster needs camera access for video streaming.",
+        "NSAppleMusicUsageDescription": "Grooveline Broadcaster captures audio output for live radio streaming."
+      },
+      "extraResources": [
+        {
+          "from": "bin/mac/",
+          "to": ".",
+          "filter": [
+            "**/*"
+          ]
+        }
+      ],
+      "notarize": false
+    },
+    "dmg": {
+      "title": "Grooveline Broadcaster",
+      "background": "assets/dmg-background.png",
+      "window": {
+        "width": 540,
+        "height": 380
+      },
+      "contents": [
+        {
+          "x": 140,
+          "y": 190,
+          "type": "file"
+        },
+        {
+          "x": 400,
+          "y": 190,
+          "type": "link",
+          "path": "/Applications"
+        },
+        {
+          "x": 270,
+          "y": 310,
+          "type": "file",
+          "path": "assets/Install Notes.txt"
+        }
+      ],
+      "iconSize": 96,
+      "sign": true,
+      "artifactName": "Grooveline-Broadcaster-${version}-mac-${arch}.${ext}"
+    },
+    "linux": {
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "deb",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "category": "AudioVideo",
+      "icon": "assets/icon.png",
+      "maintainer": "Grooveline <info@grooveline.org>",
+      "synopsis": "Stream your DJ set live to Grooveline Radio",
+      "description": "Capture your DJ audio (PulseAudio/PipeWire) and stream it to Grooveline. Uses the system ffmpeg.",
+      "artifactName": "Grooveline-Broadcaster-${version}-${arch}.${ext}"
+    },
+    "deb": {
+      "depends": [
+        "libgtk-3-0",
+        "libnotify4",
+        "libnss3",
+        "libxss1",
+        "libxtst6",
+        "xdg-utils",
+        "libatspi2.0-0",
+        "libuuid1",
+        "libsecret-1-0",
+        "ffmpeg",
+        "pulseaudio-utils | pipewire-pulse"
+      ]
+    },
+    "publish": null
+  }
+}

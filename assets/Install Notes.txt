@@ -1,0 +1,18 @@
+GROOVELINE BROADCASTER — INSTALL NOTES
+=======================================
+
+macOS
+-----
+1. Open the .dmg file
+2. Drag "Grooveline Broadcaster" to your Applications folder
+3. On first launch, macOS may block the app with a security warning
+4. To open it: right-click the app icon → Open → click Open
+   (You only need to do this once)
+
+Windows
+-------
+1. Extract the .zip file
+2. Run the installer (.exe)
+3. If Windows Defender shows a warning, click "More info" → "Run anyway"
+
+Need help? Visit grooveline.org or email support@grooveline.org

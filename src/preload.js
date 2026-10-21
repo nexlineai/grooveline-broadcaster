@@ -1,0 +1,60 @@
+const { contextBridge, ipcRenderer } = require('electron');
+
+contextBridge.exposeInMainWorld('grooveline', {
+  loadConfig: () => ipcRenderer.invoke('load-config'),
+  saveConfig: (cfg) => ipcRenderer.invoke('save-config', cfg),
+  getPlatform: () => ipcRenderer.invoke('get-platform'),
+  startStream: (opts) => ipcRenderer.invoke('start-stream', opts),
+  stopStream: () => ipcRenderer.invoke('stop-stream'),
+  forceQuit: () => ipcRenderer.invoke('force-quit'),
+  minimizeWindow: () => ipcRenderer.invoke('minimize-window'),
+  maximizeWindow: () => ipcRenderer.invoke('maximize-window'),
+  closeWindow: () => ipcRenderer.invoke('close-window'),
+  checkFFmpeg: () => ipcRenderer.invoke('check-ffmpeg'),
+  openFFmpegHelp: () => ipcRenderer.invoke('open-ffmpeg-help'),
+  probeAudioChannels: (opts) => ipcRenderer.invoke('probe-audio-channels', opts),
+  listAudioDevices: () => ipcRenderer.invoke('list-audio-devices'),
+
+  onStreamLog: (cb) => ipcRenderer.on('stream-log', (_, data) => cb(data)),
+  onStreamStats: (cb) => ipcRenderer.on('stream-stats', (_, data) => cb(data)),
+  onStreamStopped: (cb) => ipcRenderer.on('stream-stopped', (_, data) => cb(data)),
+  onStreamReconnecting: (cb) => ipcRenderer.on('stream-reconnecting', (_, data) => cb(data)),
+  onStreamReconnected: (cb) => ipcRenderer.on('stream-reconnected', (_, data) => cb(data)),
+  onConfirmClose: (cb) => ipcRenderer.on('confirm-close', (_, data) => cb(data)),
+
+  removeAllListeners: (channel) => ipcRenderer.removeAllListeners(channel),
+
+  // PCM pipe — renderer sends raw audio chunks, main pipes to ffmpeg stdin
+  sendPcmChunk: (buffer) => ipcRenderer.send('pcm-chunk', Buffer.from(buffer)),
+  // Video pipe — renderer sends raw RGBA canvas frames, main pipes to ffmpeg stdin
+  sendVideoChunk: (buffer) => ipcRenderer.send('video-chunk', Buffer.from(buffer)),
+  startPcmStream: (opts) => ipcRenderer.invoke('start-pcm-stream', opts),
+  stopPcmStream: () => ipcRenderer.invoke('stop-pcm-stream'),
+
+  // Now Playing
+  openFileDialog: () => ipcRenderer.invoke('open-file-dialog'),
+  startNpWatcher: (opts) => ipcRenderer.invoke('start-np-watcher', opts),
+  stopNpWatcher: () => ipcRenderer.invoke('stop-np-watcher'),
+  updateIcecastMeta: (opts) => ipcRenderer.invoke('update-icecast-meta', opts),
+  detectNowPlayingPath: () => ipcRenderer.invoke('detect-nowplaying-path'),
+  sendRecChunk: (chunk) => ipcRenderer.send('rec-chunk', chunk),
+  readNpFileRaw: (filePath) => ipcRenderer.invoke('read-np-file-raw', filePath),
+  getNpCurrent: () => ipcRenderer.invoke('get-np-current'),
+  onNpTrack: (cb) => ipcRenderer.on('np-track', (_, data) => cb(data)),
+  onNpLog: (cb) => ipcRenderer.on('np-log', (_, data) => cb(data)),
+  openFolderDialog: () => ipcRenderer.invoke('open-folder-dialog'),
+  getHomeDir: () => ipcRenderer.invoke('get-home-dir'),
+  startRecording: (opts) => ipcRenderer.invoke('start-recording', opts),
+  stopRecording: () => ipcRenderer.invoke('stop-recording'),
+  showInFolder: (p) => ipcRenderer.invoke('show-in-folder', p),
+  onRecordingLog: (cb) => ipcRenderer.on('recording-log', (_, data) => cb(data)),
+  onRecordingStopped: (cb) => ipcRenderer.on('recording-stopped', (_, data) => cb(data)),
+  openExternal: (url) => ipcRenderer.invoke('open-external', url),
+  apiLogin: (opts) => ipcRenderer.invoke('api-login', opts),
+  apiPing: () => ipcRenderer.invoke('api-ping'),
+  apiMe: (opts) => ipcRenderer.invoke('api-me', opts),
+  apiBookings: (opts) => ipcRenderer.invoke('api-bookings', opts),
+  apiCredentials: (opts) => ipcRenderer.invoke('api-credentials', opts),
+  apiCheckMount: (opts) => ipcRenderer.invoke('api-check-mount', opts),
+  apiCheckStatus: (opts) => ipcRenderer.invoke('api-check-status', opts),
+});

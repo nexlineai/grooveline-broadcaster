@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="540" height="380" viewBox="0 0 540 380">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#141008"/>
+      <stop offset="100%" stop-color="#0a0806"/>
+    </linearGradient>
+  </defs>
+  <rect width="540" height="380" fill="url(#bg)"/>
+  <!-- Waveform -->
+  <polyline points="40,190 80,190 100,190 115,165 125,130 138,250 150,105 162,275 172,140 180,190 190,170 200,210 210,120 222,260 232,152 242,228 250,135 262,190 274,135 284,228 292,152 302,260 312,120 320,210 330,170 340,190 352,140 364,275 376,105 388,250 400,130 410,165 425,190 440,190 500,190"
+    fill="none" stroke="#FF6B00" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" opacity="0.12"/>
+  <!-- Title -->
+  <text x="270" y="310" text-anchor="middle" font-family="Arial,sans-serif" font-size="13" font-weight="700" letter-spacing="6" fill="#FF6B00" opacity="0.5">GROOVELINE</text>
+  <text x="270" y="330" text-anchor="middle" font-family="Arial,sans-serif" font-size="9" letter-spacing="4" fill="#5a4730" opacity="0.7">BROADCASTER</text>
+  <!-- Arrows / Install hint labels -->
+  <text x="140" y="355" text-anchor="middle" font-family="Arial,sans-serif" font-size="10" fill="#3a2e1a" letter-spacing="1">App</text>
+  <text x="400" y="355" text-anchor="middle" font-family="Arial,sans-serif" font-size="10" fill="#3a2e1a" letter-spacing="1">Applications</text>
+</svg>

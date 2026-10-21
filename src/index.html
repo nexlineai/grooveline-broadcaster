@@ -1,0 +1,2895 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<title>Grooveline Broadcaster</title>
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;600;700;900&family=Rajdhani:wght@300;400;500;600&family=Share+Tech+Mono&display=swap" rel="stylesheet"/>
+<style>
+:root {
+  --teal:    #00d4c8;
+  --coral:   #ff5e6c;
+  --gold:    #f0c040;
+  --bg0:     #050508;
+  --bg1:     #080810;
+  --bg2:     #0d0d18;
+  --bg3:     #111120;
+  --glass:   rgba(0,212,200,0.04);
+  --border:  rgba(0,212,200,0.14);
+  --borderH: rgba(0,212,200,0.35);
+  --text:    #e2e8f8;
+  --muted:   rgba(200,210,240,0.45);
+  --font-display: 'Orbitron', monospace;
+  --font-body:    'Rajdhani', sans-serif;
+  --font-mono:    'Share Tech Mono', monospace;
+}
+*,*::before,*::after { box-sizing:border-box; margin:0; padding:0; }
+html,body { height:100%; overflow:hidden; }
+body {
+  font-family: var(--font-body);
+  background: var(--bg0);
+  color: var(--text);
+  font-size:14px;
+  user-select:none;
+  -webkit-app-region: no-drag;
+}
+
+/* ── Titlebar ── */
+#titlebar {
+  height:38px;
+  background: rgba(5,5,8,0.95);
+  border-bottom: 1px solid var(--border);
+  display:flex; align-items:center;
+  -webkit-app-region: drag;
+  flex-shrink:0;
+  padding: 0 12px;
+  gap:10px;
+}
+.tb-traffic { display:flex; gap:7px; -webkit-app-region:no-drag; }
+.tb-dot {
+  width:12px; height:12px; border-radius:50%; border:none; cursor:pointer;
+  transition: filter .15s;
+}
+.tb-dot:hover { filter:brightness(1.3); }
+#btn-close    { background:#ff5f57; }
+#btn-minimize { background:#febc2e; }
+#btn-maximize { background:#28c840; }
+.tb-logo {
+  display:flex; align-items:center; gap:8px;
+  margin: 0 auto;
+}
+.tb-logo img { height:18px; width:auto; filter:brightness(0) invert(1); opacity:.9; }
+.tb-logo-text {
+  font-family: var(--font-display);
+  font-size:10px; letter-spacing:3px; color:var(--teal);
+}
+.tb-logo-sub {
+  font-family: var(--font-mono);
+  font-size:8px; letter-spacing:2px; color:var(--muted);
+}
+#live-badge {
+  display:flex; align-items:center; gap:6px;
+  font-family:var(--font-mono); font-size:10px; letter-spacing:2px;
+  color:var(--muted); -webkit-app-region:no-drag;
+  padding:3px 10px; border:1px solid transparent; border-radius:2px;
+  transition: all .3s;
+}
+#live-badge.on {
+  color:var(--coral); border-color:rgba(255,94,108,.3);
+  background:rgba(255,94,108,.08);
+}
+.live-dot {
+  width:6px; height:6px; border-radius:50%;
+  background:var(--muted); transition:background .3s;
+}
+#live-badge.on .live-dot { background:var(--coral); animation:blink 1.1s infinite; }
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:.25} }
+
+/* ── Layout ── */
+#app {
+  display:flex;
+  height: calc(100vh - 38px);
+  overflow: hidden;
+}
+
+/* ── Sidebar ── */
+#sidebar {
+  width:220px;
+  flex-shrink:0;
+  background: rgba(8,8,16,0.95);
+  border-right:1px solid var(--border);
+  display:flex; flex-direction:column;
+  overflow: hidden;
+}
+
+/* Tab nav */
+.tab-nav {
+  display:flex; flex-direction:column;
+  padding:8px;
+  gap:2px;
+  flex-shrink:0;
+}
+.tab-btn {
+  display:flex; align-items:center; gap:8px;
+  padding:8px 12px;
+  background:none; border:none; cursor:pointer;
+  color:var(--muted);
+  font-family:var(--font-mono); font-size:10px; letter-spacing:1.5px;
+  border-radius:3px;
+  text-align:left;
+  transition: all .15s;
+  border: 1px solid transparent;
+}
+.tab-btn:hover { color:var(--text); background:var(--glass); }
+.tab-btn.active {
+  color:var(--teal);
+  background: rgba(0,212,200,.07);
+  border-color: var(--border);
+}
+.tab-icon { font-size:12px; width:16px; text-align:center; }
+
+.sidebar-divider {
+  height:1px; background:var(--border); margin:6px 0; flex-shrink:0;
+}
+
+/* Preview */
+#preview-wrap {
+  position:relative; flex-shrink:0;
+  background:#000; margin:8px;
+  border:1px solid var(--border);
+  border-radius:3px; overflow:hidden;
+  aspect-ratio:16/9;
+}
+#preview-video {
+  width:100%; height:100%; object-fit:cover; display:none;
+}
+#preview-ph {
+  position:absolute; inset:0;
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+  gap:4px;
+}
+.ph-icon { font-size:22px; opacity:.3; }
+.ph-text { font-family:var(--font-mono); font-size:9px; letter-spacing:2px; color:var(--muted); }
+#preview-err {
+  position:absolute; bottom:0; left:0; right:0;
+  background:rgba(255,94,108,.9); color:#fff;
+  font-size:10px; padding:4px 8px; text-align:center;
+  display:none;
+}
+#preview-err.show { display:block; }
+#preview-btn {
+  position:absolute; bottom:6px; right:6px;
+  background:rgba(0,212,200,.15); border:1px solid var(--teal);
+  color:var(--teal); font-family:var(--font-mono); font-size:9px;
+  letter-spacing:1px; padding:3px 8px; border-radius:2px; cursor:pointer;
+  transition:all .15s;
+}
+#preview-btn:hover, #preview-btn.active {
+  background:rgba(0,212,200,.25);
+}
+
+/* VU Meters */
+#vu-section {
+  padding:6px 10px;
+  flex-shrink:0;
+}
+.vu-hdr {
+  display:flex; justify-content:space-between; align-items:center;
+  margin-bottom:4px;
+}
+.vu-lbl { font-family:var(--font-mono); font-size:8px; letter-spacing:2px; color:var(--muted); }
+#vu-src { font-family:var(--font-mono); font-size:8px; color:var(--teal); max-width:110px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.vu-meters { display:flex; gap:3px; }
+.vu-ch { display:flex; flex-direction:column; align-items:center; gap:2px; flex:1; }
+.vu-bars { display:flex; gap:1px; height:20px; align-items:flex-end; width:100%; }
+.vu-bar { flex:1; border-radius:1px 1px 0 0; min-height:2px; transition:background .05s; }
+.vu-chl { font-family:var(--font-mono); font-size:7px; color:var(--muted); }
+
+/* Stats */
+#stats-section {
+  padding:6px 10px;
+  flex-shrink:0;
+}
+.stat-row {
+  display:flex; justify-content:space-between;
+  font-family:var(--font-mono); font-size:9px;
+  color:var(--muted); padding:2px 0;
+  border-bottom:1px solid rgba(0,212,200,.05);
+}
+.stat-val { color:var(--teal); }
+
+/* Volume */
+#vol-section {
+  padding:6px 10px 8px;
+  flex-shrink:0;
+}
+.vol-row { display:flex; justify-content:space-between; margin-bottom:4px; }
+.vol-lbl { font-family:var(--font-mono); font-size:9px; color:var(--muted); }
+#vol-val { font-family:var(--font-mono); font-size:9px; color:var(--teal); }
+input[type=range] {
+  -webkit-appearance:none; width:100%; height:3px;
+  background: linear-gradient(to right, var(--teal) var(--range-pct,66.7%), rgba(0,212,200,.2) var(--range-pct,66.7%));
+  border-radius:2px; outline:none;
+}
+input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance:none; width:10px; height:10px;
+  border-radius:50%; background:var(--teal); cursor:pointer;
+  border:2px solid var(--bg0);
+}
+
+/* Go Live btn */
+#go-live-wrap {
+  padding:8px 10px;
+  flex-shrink:0;
+  border-bottom:1px solid var(--border);
+}
+#btn-go-live {
+  width:100%; padding:10px;
+  background: rgba(0,212,200,.1);
+  border:1px solid var(--teal);
+  color:var(--teal);
+  font-family:var(--font-display); font-size:10px; letter-spacing:3px;
+  border-radius:3px; cursor:pointer;
+  transition:all .2s;
+  position:relative; overflow:hidden;
+}
+#btn-go-live:hover {
+  background:rgba(0,212,200,.2);
+  box-shadow: 0 0 20px rgba(0,212,200,.2);
+}
+#btn-go-live.live {
+  background:rgba(255,94,108,.15);
+  border-color:var(--coral); color:var(--coral);
+  animation: pulse-live 2s ease infinite;
+}
+@keyframes pulse-live {
+  0%,100%{box-shadow:0 0 0 0 rgba(255,94,108,.3)}
+  50%{box-shadow:0 0 0 8px rgba(255,94,108,.0)}
+}
+
+/* ── Main panels ── */
+#main {
+  flex:1; overflow:hidden;
+  display:flex; flex-direction:column;
+}
+
+.panel {
+  display:none; flex:1; overflow-y:auto;
+  padding:16px;
+}
+.panel.active { display:block; }
+.panel::-webkit-scrollbar { width:4px; }
+.panel::-webkit-scrollbar-track { background:transparent; }
+.panel::-webkit-scrollbar-thumb { background:var(--border); border-radius:2px; }
+
+/* Panel header */
+.panel-hdr {
+  display:flex; align-items:center; justify-content:space-between;
+  margin-bottom:14px;
+  padding-bottom:10px;
+  border-bottom:1px solid var(--border);
+}
+.panel-title {
+  font-family:var(--font-display); font-size:11px;
+  letter-spacing:3px; color:var(--teal);
+}
+
+/* Cards */
+.card {
+  background: rgba(8,8,16,0.7);
+  border:1px solid var(--border);
+  border-radius:4px; padding:14px;
+  margin-bottom:10px;
+  position:relative;
+}
+.card::before,.card::after,
+.card-corner-bl,.card-corner-br {
+  content:''; position:absolute;
+  width:10px; height:10px; pointer-events:none;
+}
+.card::before  { top:0; left:0;  border-top:1px solid var(--teal); border-left:1px solid var(--teal); }
+.card::after   { top:0; right:0; border-top:1px solid var(--teal); border-right:1px solid var(--teal); }
+.card-corner-bl { bottom:0; left:0;  border-bottom:1px solid var(--teal); border-left:1px solid var(--teal); }
+.card-corner-br { bottom:0; right:0; border-bottom:1px solid var(--teal); border-right:1px solid var(--teal); }
+
+.card-title {
+  font-family:var(--font-mono); font-size:9px; letter-spacing:2.5px;
+  color:var(--muted); text-transform:uppercase; margin-bottom:10px;
+}
+
+/* Form elements */
+.form-row { margin-bottom:8px; }
+.form-label {
+  display:block;
+  font-family:var(--font-mono); font-size:9px; letter-spacing:1.5px;
+  color:var(--muted); margin-bottom:4px;
+}
+input[type=text],input[type=password],input[type=email],select,textarea {
+  width:100%; background:rgba(0,0,0,.5);
+  border:1px solid var(--border); border-radius:3px;
+  color:var(--text); font-family:var(--font-body); font-size:13px;
+  padding:7px 10px; outline:none;
+  transition: border-color .15s;
+}
+input[type=text]:focus,input[type=password]:focus,input[type=email]:focus,select:focus {
+  border-color:var(--teal);
+  box-shadow: 0 0 0 2px rgba(0,212,200,.1);
+}
+select {
+  appearance:none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath fill='%2300d4c8' d='M0 0l5 6 5-6z'/%3E%3C/svg%3E");
+  background-repeat:no-repeat; background-position:right 10px center;
+  padding-right:28px; cursor:pointer;
+}
+.form-row-2 { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:8px; }
+.form-row-3 { display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; margin-bottom:8px; }
+.form-row-4 { display:grid; grid-template-columns:1fr 1fr 1fr 1fr; gap:8px; margin-bottom:8px; }
+.form-hint { font-family:var(--font-mono); font-size:9px; color:var(--muted); margin-top:3px; }
+
+/* Toggle switch */
+.toggle-row {
+  display:flex; align-items:center; justify-content:space-between;
+  padding:6px 0;
+}
+.toggle-label {
+  font-family:var(--font-mono); font-size:10px; letter-spacing:1px;
+  color:var(--text);
+}
+.toggle { position:relative; display:inline-block; width:36px; height:18px; flex-shrink:0; cursor:pointer; }
+.toggle input { opacity:0; width:0; height:0; }
+.toggle-track {
+  position:absolute; inset:0; border-radius:9px;
+  background:rgba(0,212,200,.15); border:1px solid var(--border);
+  transition:.2s;
+}
+.toggle-track::after {
+  content:''; position:absolute;
+  width:12px; height:12px; border-radius:50%;
+  background:var(--muted); top:2px; left:2px;
+  transition:.2s;
+}
+.toggle input:checked + .toggle-track { background:rgba(0,212,200,.25); border-color:var(--teal); }
+.toggle input:checked + .toggle-track::after { transform:translateX(18px); background:var(--teal); }
+
+/* Buttons */
+.btn {
+  padding:7px 14px; border-radius:3px; cursor:pointer;
+  font-family:var(--font-mono); font-size:10px; letter-spacing:1.5px;
+  border:1px solid; transition:all .15s; display:inline-flex; align-items:center; gap:6px;
+}
+.btn-teal { border-color:var(--teal); color:var(--teal); background:rgba(0,212,200,.08); }
+.btn-teal:hover { background:rgba(0,212,200,.18); }
+.btn-coral { border-color:var(--coral); color:var(--coral); background:rgba(255,94,108,.08); }
+.btn-coral:hover { background:rgba(255,94,108,.18); }
+.btn-ghost { border-color:var(--border); color:var(--muted); background:transparent; }
+.btn-ghost:hover { border-color:var(--borderH); color:var(--text); }
+.btn-sm { padding:4px 10px; font-size:9px; }
+.btn-full { width:100%; justify-content:center; padding:10px; font-size:10px; letter-spacing:2px; }
+
+/* Channel tag */
+.ch-tag {
+  display:inline-block; padding:2px 6px;
+  background:rgba(0,212,200,.1); border:1px solid var(--border);
+  border-radius:2px; font-family:var(--font-mono); font-size:9px; color:var(--teal);
+}
+#ch-hint { display:none; font-family:var(--font-mono); font-size:9px; color:var(--gold); margin-top:4px; }
+
+/* ffmpeg warning */
+#ffmpeg-warn {
+  display:none;
+  padding:8px 12px; margin-bottom:10px;
+  background:rgba(240,192,64,.08); border:1px solid rgba(240,192,64,.3);
+  border-radius:3px;
+  font-family:var(--font-mono); font-size:10px; color:var(--gold);
+}
+
+/* ── Destinations ── */
+.dest-list { display:flex; flex-direction:column; gap:8px; }
+.dest-card {
+  background:rgba(8,8,16,.8); border:1px solid var(--border);
+  border-radius:4px; overflow:hidden;
+  transition:border-color .15s;
+}
+.dest-card.enabled { border-color:rgba(0,212,200,.3); }
+.dest-card-hdr {
+  display:flex; align-items:center; gap:10px;
+  padding:10px 12px; cursor:pointer;
+  transition:background .15s;
+}
+.dest-card-hdr:hover { background:var(--glass); }
+.dest-icon { font-size:14px; width:20px; text-align:center; }
+.dest-name { flex:1; font-family:var(--font-mono); font-size:10px; letter-spacing:1px; }
+.dest-chev { font-size:9px; color:var(--muted); transition:transform .2s; }
+.dest-card.open .dest-chev { transform:rotate(180deg); }
+.dest-fields { display:none; padding:10px 12px; border-top:1px solid var(--border); }
+.dest-card.open .dest-fields { display:block; }
+.remove-btn {
+  font-family:var(--font-mono); font-size:9px; letter-spacing:1px;
+  color:var(--coral); background:none; border:1px solid rgba(255,94,108,.3);
+  padding:3px 8px; border-radius:2px; cursor:pointer; transition:all .15s;
+}
+.remove-btn:hover { background:rgba(255,94,108,.1); }
+
+/* Add menu */
+#dest-add-menu {
+  background:var(--bg2); border:1px solid var(--border);
+  border-radius:4px; overflow:hidden; margin-top:8px;
+}
+.add-menu-item {
+  display:flex; align-items:center; gap:10px;
+  padding:9px 14px; cursor:pointer;
+  font-family:var(--font-mono); font-size:10px; color:var(--text);
+  border-bottom:1px solid rgba(0,212,200,.06);
+  transition:background .1s;
+}
+.add-menu-item:hover { background:var(--glass); }
+.add-menu-item:last-child { border-bottom:none; }
+
+/* ── Recording ── */
+.fmt-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:6px; margin-bottom:8px; }
+.fmt-btn {
+  padding:8px 4px; border:1px solid var(--border); border-radius:3px;
+  text-align:center; cursor:pointer;
+  font-family:var(--font-mono); font-size:10px; letter-spacing:1px;
+  color:var(--muted); background:rgba(0,0,0,.3);
+  transition:all .15s; user-select:none;
+}
+.fmt-btn:hover { border-color:var(--borderH); color:var(--text); }
+.fmt-btn.active { border-color:var(--teal); color:var(--teal); background:rgba(0,212,200,.08); }
+
+#rec-btn-wrap { display:flex; align-items:center; gap:8px; margin-top:10px; }
+#rec-btn {
+  flex:1; padding:10px;
+  background:rgba(0,212,200,.08); border:1px solid var(--teal);
+  color:var(--teal);
+  font-family:var(--font-display); font-size:10px; letter-spacing:2px;
+  border-radius:3px; cursor:pointer; transition:all .2s;
+}
+#rec-btn:hover { background:rgba(0,212,200,.18); }
+#rec-btn.recording {
+  background:rgba(255,94,108,.12); border-color:var(--coral); color:var(--coral);
+  animation:pulse-live 2s ease infinite;
+}
+#rec-timer {
+  font-family:var(--font-mono); font-size:11px; color:var(--coral);
+  white-space:nowrap;
+}
+
+#rec-saved {
+  margin-top:8px;
+  padding:6px 10px;
+  background:rgba(0,212,200,.06); border:1px solid rgba(0,212,200,.2);
+  border-radius:3px;
+  font-family:var(--font-mono); font-size:9px; color:var(--teal);
+  display:none; align-items:center; gap:8px;
+}
+#rec-saved.show { display:flex; }
+#rec-saved-path { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+#rec-log {
+  margin-top:8px; max-height:80px; overflow-y:auto;
+  font-family:var(--font-mono); font-size:9px; color:var(--muted);
+  line-height:1.6;
+}
+#rec-log::-webkit-scrollbar { width:3px; }
+#rec-log::-webkit-scrollbar-thumb { background:var(--border); }
+
+/* ── Now Playing ── */
+.np-track-display {
+  background:rgba(0,0,0,.4); border:1px solid rgba(0,212,200,.08);
+  border-radius:3px; padding:14px; margin-bottom:10px;
+  position:relative; overflow:hidden;
+}
+.np-track-display::before {
+  content:''; position:absolute; bottom:0; left:0; right:0; height:2px;
+  background:linear-gradient(90deg, transparent, var(--teal), var(--coral), transparent);
+  background-size:200% 100%; animation:livebar 2.5s linear infinite;
+}
+@keyframes livebar { 0%{background-position:100% 0} 100%{background-position:-100% 0} }
+.np-label {
+  font-family:var(--font-mono); font-size:8px; letter-spacing:2.5px;
+  color:var(--muted); margin-bottom:5px;
+}
+.np-artist { font-family:var(--font-display); font-size:11px; color:var(--teal); letter-spacing:2px; margin-bottom:3px; }
+.np-title  { font-family:var(--font-body); font-size:14px; color:var(--text); font-weight:500; }
+.np-source-tag {
+  position:absolute; top:10px; right:10px;
+  font-family:var(--font-mono); font-size:8px; letter-spacing:1.5px;
+  color:var(--muted); background:rgba(0,212,200,.08);
+  border:1px solid var(--border); padding:2px 6px; border-radius:2px;
+}
+.np-status-row { display:flex; align-items:center; gap:8px; margin-bottom:10px; }
+.np-dot { width:7px; height:7px; border-radius:50%; background:var(--border); flex-shrink:0; transition:background .3s; }
+
+#np-log {
+  margin-top:8px; max-height:140px; overflow-y:auto;
+  font-family:var(--font-mono); font-size:9px; color:var(--muted); line-height:1.6;
+}
+#np-log::-webkit-scrollbar { width:3px; }
+#np-log::-webkit-scrollbar-thumb { background:var(--border); }
+
+/* ── Stream Log ── */
+#log-output {
+  font-family:var(--font-mono); font-size:10px; line-height:1.7;
+  flex:1; overflow-y:auto;
+  padding:10px;
+  background:rgba(0,0,0,.4); border:1px solid rgba(0,212,200,.06);
+  border-radius:3px; min-height:200px;
+}
+#log-output::-webkit-scrollbar { width:4px; }
+#log-output::-webkit-scrollbar-thumb { background:var(--border); }
+.log-line { display:flex; gap:10px; }
+.log-time { color:var(--muted); flex-shrink:0; }
+.log-msg.info    { color:var(--text); }
+.log-msg.success { color:var(--teal); }
+.log-msg.warn    { color:var(--gold); }
+.log-msg.error   { color:var(--coral); }
+.log-msg.live    { color:var(--coral); }
+
+/* ── Overlay ── */
+#overlay {
+  display:none; position:fixed; inset:0; z-index:100;
+  background:rgba(5,5,8,.92); backdrop-filter:blur(8px);
+  align-items:center; justify-content:center;
+}
+#overlay.show { display:flex; }
+.overlay-box {
+  background:var(--bg2); border:1px solid var(--border);
+  border-radius:4px; padding:28px 32px; text-align:center;
+  position:relative;
+}
+.overlay-box::before,.overlay-box::after,
+.ov-corner-bl,.ov-corner-br {
+  content:''; position:absolute; width:12px; height:12px; pointer-events:none;
+}
+.overlay-box::before { top:0; left:0; border-top:1px solid var(--teal); border-left:1px solid var(--teal); }
+.overlay-box::after  { top:0; right:0; border-top:1px solid var(--teal); border-right:1px solid var(--teal); }
+.ov-corner-bl { bottom:0; left:0; border-bottom:1px solid var(--teal); border-left:1px solid var(--teal); }
+.ov-corner-br { bottom:0; right:0; border-bottom:1px solid var(--teal); border-right:1px solid var(--teal); }
+.overlay-title {
+  font-family:var(--font-display); font-size:12px; letter-spacing:3px;
+  color:var(--coral); margin-bottom:8px;
+}
+.overlay-msg { font-family:var(--font-mono); font-size:10px; color:var(--muted); margin-bottom:20px; }
+.overlay-btns { display:flex; gap:10px; justify-content:center; }
+
+/* ── Sound check (1.3.0) ── */
+#btn-check {
+  width:100%; margin-top:6px; padding:7px 0;
+  background:rgba(240,192,64,.06); border:1px solid rgba(240,192,64,.45); color:var(--gold);
+  font-family:var(--font-display); font-size:10px; letter-spacing:2px;
+  border-radius:3px; cursor:pointer; transition:all .2s;
+}
+#btn-check:hover { background:rgba(240,192,64,.14); }
+#check-modal {
+  display:none; position:fixed; inset:0; z-index:90;
+  background:rgba(5,5,8,.88); backdrop-filter:blur(6px);
+  align-items:center; justify-content:center;
+}
+#check-modal.show { display:flex; }
+.check-box { width:360px; max-width:calc(100vw - 32px); text-align:left; }
+.check-box input { width:100%; margin-bottom:8px; }
+.chk-line  { font-family:var(--font-mono); font-size:10px; color:var(--muted); line-height:1.7; margin-bottom:12px; }
+.chk-line strong { color:var(--text); }
+.chk-line a { color:var(--teal); text-decoration:none; }
+.chk-err   { font-family:var(--font-mono); font-size:10px; color:var(--coral); margin:6px 0; min-height:0; }
+.chk-state { font-family:var(--font-display); font-size:11px; letter-spacing:2px; color:var(--gold); margin-bottom:6px; }
+.chk-state.on { color:var(--teal); }
+.chk-state.warn { color:var(--coral); }
+.chk-hint  { font-family:var(--font-mono); font-size:9px; color:var(--muted); line-height:1.6; margin-top:6px; }
+
+/* hidden audio element for monitor routing */
+audio#monitor-audio { display:none; }
+
+/* ── Account panel ── */
+#acct-tier-badge.free { background:rgba(100,100,120,0.2); color:var(--muted); border:1px solid rgba(100,100,120,0.3); }
+#acct-tier-badge.pro  { background:rgba(0,212,200,0.1);  color:var(--teal);  border:1px solid rgba(0,212,200,0.3); }
+#tab-account-btn { margin-top: auto; }
+.acct-slot-row {
+  display:flex; justify-content:space-between; align-items:center;
+  padding:6px 10px; background:rgba(0,0,0,0.2); border:1px solid var(--border);
+  border-radius:3px; cursor:pointer; transition:border-color .15s;
+  font-family:var(--font-mono); font-size:10px;
+}
+.acct-slot-row:hover { border-color:rgba(0,212,200,0.3); }
+.acct-slot-row .slot-row-date { color:var(--text); }
+.acct-slot-row .slot-row-load { color:var(--teal); font-size:9px; opacity:0; transition:opacity .15s; }
+.acct-slot-row:hover .slot-row-load { opacity:1; }
+</style>
+</head>
+<body>
+
+<!-- ── Titlebar ── -->
+<div id="titlebar">
+  <div class="tb-traffic">
+    <button class="tb-dot" id="btn-close"></button>
+    <button class="tb-dot" id="btn-minimize"></button>
+    <button class="tb-dot" id="btn-maximize"></button>
+  </div>
+  <div class="tb-logo">
+    <svg width="60" height="22" viewBox="0 0 520 200" style="flex-shrink:0">
+      <polyline points="0,100 40,100 55,100 70,95 80,60 90,140 100,30 112,170 122,55 130,100 140,85 150,115 158,40 168,160 178,72 188,128 196,52 206,100 216,52 226,128 234,72 244,160 254,40 262,115 270,85 280,100 290,55 300,170 312,30 322,140 332,60 342,95 350,100 365,100 520,100"
+        fill="none" stroke="#00d4c8" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+    <div>
+      <div class="tb-logo-text">GROOVELINE</div>
+      <div class="tb-logo-sub">BROADCASTER</div>
+    </div>
+  </div>
+  <div id="live-badge"><div class="live-dot"></div><span id="live-timer">00:00:00</span></div>
+</div>
+
+<audio id="monitor-audio" autoplay></audio>
+
+<div id="app">
+
+  <!-- ── Sidebar ── -->
+  <div id="sidebar">
+
+    <nav class="tab-nav">
+      <button class="tab-btn active" data-tab="sources"><span class="tab-icon">◈</span>SOURCES</button>
+      <button class="tab-btn" data-tab="destinations"><span class="tab-icon">⟁</span>DESTINATIONS</button>
+      <button class="tab-btn" data-tab="nowplaying"><span class="tab-icon">♫</span>NOW PLAYING</button>
+      <button class="tab-btn" data-tab="log"><span class="tab-icon">≡</span>STREAM LOG</button>
+    </nav>
+
+    <div class="sidebar-divider"></div>
+
+    <!-- Camera preview -->
+    <div id="preview-wrap">
+      <video id="preview-video" autoplay muted playsinline></video>
+      <div id="preview-ph"><div class="ph-icon">⬡</div><div class="ph-text">NO PREVIEW</div></div>
+      <div id="preview-err"></div>
+      <button id="preview-btn">▶ PREVIEW</button>
+    </div>
+
+    <!-- Go Live -->
+    <div id="go-live-wrap">
+      <button id="btn-go-live">⬤ GO LIVE</button>
+      <button id="btn-check" onclick="openCheckModal()">◎ SOUND CHECK</button>
+      <button id="btn-record" onclick="toggleRecording()" style="width:100%;margin-top:6px;background:rgba(20,20,30,0.8);border:1px solid #333;color:#555;font-family:var(--font-display);font-size:10px;letter-spacing:2px;padding:6px 0;border-radius:3px;cursor:pointer;transition:all .2s">RECORD</button>
+      <div id="rec-timer" style="visibility:hidden;font-family:var(--font-mono);font-size:9px;color:#cc3333;text-align:center;width:100%;margin-top:3px;letter-spacing:1px"></div>
+    </div>
+
+    <!-- VU Meters -->
+    <div id="vu-section">
+      <div class="vu-hdr">
+        <span class="vu-lbl">INPUT LEVEL</span>
+        <span id="vu-src">no source</span>
+      </div>
+      <div class="vu-meters">
+        <div class="vu-ch"><div class="vu-bars" id="vu-L"></div><div class="vu-chl">L</div></div>
+        <div class="vu-ch"><div class="vu-bars" id="vu-R"></div><div class="vu-chl">R</div></div>
+      </div>
+    </div>
+
+    <div class="sidebar-divider"></div>
+
+    <!-- Stats -->
+    <div id="stats-section">
+      <div class="stat-row"><span>BITRATE</span><span class="stat-val" id="stat-bitrate">— kbps</span></div>
+      <div class="stat-row"><span>STREAMS</span><span class="stat-val" id="stat-streams">0</span></div>
+      <div class="stat-row"><span>STATUS</span><span class="stat-val" id="stat-status">IDLE</span></div>
+    </div>
+
+    <!-- Volume -->
+    <div id="vol-section">
+      <div class="vol-row">
+        <span class="vol-lbl">STREAM VOLUME</span>
+        <span id="vol-val">100%</span>
+      </div>
+      <input type="range" id="vol-slider" min="0" max="150" value="100">
+    </div>
+
+  </div><!-- /sidebar -->
+
+  <!-- ── Main ── -->
+  <div id="main">
+
+    <!-- SOURCES -->
+    <div class="panel active" id="panel-sources">
+      <div id="ffmpeg-warn">⚠ ffmpeg not found — <a id="ffmpeg-link" href="#" style="color:var(--gold)">install it</a> before going live.</div>
+
+      <div class="card">
+        <div class="card-corner-bl"></div><div class="card-corner-br"></div>
+        <div class="card-title">AUDIO SOURCE</div>
+        <div class="form-row">
+          <label class="form-label">INPUT DEVICE</label>
+          <select id="audio-device"></select>
+        </div>
+        <div class="form-row" style="display:flex;align-items:center;gap:8px;">
+          <div style="flex:1">
+            <label class="form-label">CHANNEL PAIR</label>
+            <select id="audio-channels"></select>
+          </div>
+          <span class="ch-tag" id="ch-count-tag">?</span>
+          <button class="btn btn-ghost btn-sm" id="refresh-btn">↺</button>
+        </div>
+        <div id="ch-hint" class="form-hint"></div>
+      </div>
+
+      <div class="card" id="video-row" style="display:none">
+        <div class="card-corner-bl"></div><div class="card-corner-br"></div>
+        <div class="card-title">VIDEO SOURCE</div>
+        <div class="form-row">
+          <label class="form-label">CAMERA</label>
+          <select id="video-device"></select>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-corner-bl"></div><div class="card-corner-br"></div>
+        <div class="card-title">ENCODE QUALITY</div>
+        <div class="form-row-2">
+          <div>
+            <label class="form-label">AUDIO BITRATE</label>
+            <select id="q-abr">
+              <option value="192k" selected>192 kbps</option>
+              <option value="256k">256 kbps</option>
+              <option value="320k">320 kbps</option>
+            </select>
+          </div>
+          <select id="q-samplerate" style="display:none"><option value="44100" selected>44100 Hz</option></select>
+        </div>
+        <div id="video-quality-section" style="display:none">
+          <div class="form-row-3">
+            <div>
+              <label class="form-label">VIDEO BITRATE</label>
+              <select id="q-vbr">
+                <option value="300k">300 kbps</option>
+                <option value="1000k" selected>1 Mbps</option>
+                <option value="2000k">2 Mbps</option>
+              </select>
+            </div>
+            <div>
+              <label class="form-label">RESOLUTION</label>
+              <select id="q-res">
+                <option value="640x360">640×360 (360p)</option>
+                <option value="1280x720" selected>1280×720 (720p — max)</option>
+              </select>
+            </div>
+            <select id="q-fps" style="display:none"><option value="30" selected>30</option></select>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-corner-bl"></div><div class="card-corner-br"></div>
+        <div class="card-title">RECORDING</div>
+        <div class="fmt-grid">
+          <div class="fmt-btn active" id="fmt-aac" onclick="setRecFmt('aac')">AAC</div>
+          <div class="fmt-btn" id="fmt-wav" onclick="setRecFmt('wav')">WAV</div>
+          <div class="fmt-btn" id="fmt-mp4" onclick="setRecFmt('mp4')">MP4</div>
+        </div>
+        <div class="form-hint" id="fmt-hint" style="margin-top:6px">AAC — 320kbps · ~2.4MB/min · universal compatibility</div>
+        <div style="display:flex;align-items:center;gap:8px;margin-top:10px">
+          <div id="rec-folder-display" style="flex:1;font-family:var(--font-mono);font-size:10px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">No folder selected</div>
+          <button class="btn btn-ghost btn-sm" onclick="browseRecFolder()">BROWSE</button>
+        </div>
+        <div id="rec-saved" style="margin-top:8px;font-family:var(--font-mono);font-size:10px;color:var(--teal);display:none;align-items:center;gap:6px">
+          <span>✓</span>
+          <span id="rec-saved-path" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
+          <button class="btn btn-ghost btn-sm" onclick="showRecInFolder()">SHOW</button>
+        </div>
+        <div id="rec-log" style="margin-top:6px"></div>
+      </div>
+    </div><!-- /panel-sources -->
+
+    <!-- DESTINATIONS -->
+    <div class="panel" id="panel-destinations">
+      <div class="panel-hdr">
+        <span class="panel-title">DESTINATIONS</span>
+        <span id="dest-count" style="font-family:var(--font-mono);font-size:9px;color:var(--muted)">0 enabled</span>
+      </div>
+
+      <div class="card" style="margin-bottom:10px">
+        <div class="card-corner-bl"></div><div class="card-corner-br"></div>
+        <div class="card-title">MONITOR OUTPUT</div>
+        <div id="output-devices-section" style="display:none">
+          <div class="form-row">
+            <label class="form-label">PLAYBACK DEVICE</label>
+            <select id="output-device-list"></select>
+          </div>
+        </div>
+      </div>
+
+      <div class="dest-list" id="dest-list"></div>
+      <button class="btn btn-teal btn-full" id="add-dest-btn" style="margin-top:10px">＋ ADD DESTINATION</button>
+
+      <!-- ── Grooveline Account ─────────────────── -->
+      <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border)">
+        <div style="font-family:var(--font-display);font-size:9px;letter-spacing:2px;color:var(--teal);margin-bottom:10px;display:flex;align-items:center;justify-content:space-between">
+          GROOVELINE ACCOUNT
+          <span id="acct-tier-badge" style="font-family:var(--font-mono);font-size:9px;padding:2px 8px;border-radius:2px;display:none"></span>
+        </div>
+      <!-- Login form (shown when logged out) -->
+      <div id="acct-login-section">
+        <div class="card" style="margin-bottom:10px">
+          <div class="card-corner-bl"></div><div class="card-corner-br"></div>
+          <div class="card-title">SIGN IN</div>
+          <div class="form-hint" style="margin-bottom:10px;color:rgba(200,210,240,0.6)">Sign in with your grooveline.org account to load your upcoming broadcast slots and streaming credentials automatically.</div>
+          <div class="form-row">
+            <label class="form-label">EMAIL</label>
+            <input type="email" id="acct-email" placeholder="you@example.com" autocomplete="email">
+          </div>
+          <div class="form-row">
+            <label class="form-label">PASSWORD</label>
+            <input type="password" id="acct-password" placeholder="••••••••" autocomplete="current-password">
+          </div>
+          <div id="acct-login-error" style="font-family:var(--font-mono);font-size:10px;color:var(--coral);margin:6px 0;display:none"></div>
+          <button class="btn btn-teal btn-full" id="acct-login-btn" onclick="acctLogin()" style="margin-top:4px">SIGN IN</button>
+        </div>
+        <div style="text-align:center;font-family:var(--font-mono);font-size:9px;color:var(--muted)">
+          No account? <a href="#" onclick="openGrooveline()" style="color:var(--teal);text-decoration:none">grooveline.org</a>
+        </div>
+      </div>
+
+      <!-- Logged-in section (shown when authenticated) -->
+      <div id="acct-loggedin-section" style="display:none">
+
+        <!-- DJ Identity -->
+        <div id="acct-identity" style="display:flex;align-items:center;gap:12px;padding:10px 0 14px;border-bottom:1px solid var(--border);margin-bottom:12px">
+          <div style="width:40px;height:40px;border-radius:50%;background:rgba(0,212,200,0.1);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0">🎧</div>
+          <div style="flex:1;min-width:0">
+            <div id="acct-dj-name" style="font-family:var(--font-display);font-size:11px;letter-spacing:2px;color:var(--teal);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">DJ NAME</div>
+            <div id="acct-dj-email" style="font-family:var(--font-mono);font-size:9px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></div>
+          </div>
+          <button class="btn btn-ghost btn-sm" onclick="acctLogout()" style="flex-shrink:0;font-size:9px">SIGN OUT</button>
+        </div>
+
+        <!-- Next slot card -->
+        <div id="acct-next-slot" style="display:none;margin-bottom:10px">
+          <div style="font-family:var(--font-mono);font-size:9px;letter-spacing:2px;color:var(--muted);margin-bottom:6px">NEXT SLOT</div>
+          <div class="card" style="border-color:rgba(0,212,200,0.25);background:rgba(0,212,200,0.04)">
+            <div class="card-corner-bl"></div><div class="card-corner-br"></div>
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">
+              <div>
+                <div id="slot-date" style="font-family:var(--font-display);font-size:12px;color:var(--teal);letter-spacing:1px"></div>
+                <div id="slot-time" style="font-family:var(--font-mono);font-size:10px;color:var(--muted);margin-top:2px"></div>
+              </div>
+              <div id="slot-countdown" style="font-family:var(--font-mono);font-size:9px;color:var(--gold);text-align:right;padding:3px 8px;border:1px solid rgba(240,192,64,0.3);border-radius:2px;background:rgba(240,192,64,0.05)"></div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:10px">
+              <div style="background:rgba(0,0,0,0.3);padding:6px 8px;border-radius:3px">
+                <div style="font-family:var(--font-mono);font-size:8px;color:var(--muted);margin-bottom:2px">SERVER</div>
+                <div id="slot-server" style="font-family:var(--font-mono);font-size:10px;color:var(--text);word-break:break-all"></div>
+              </div>
+              <div style="background:rgba(0,0,0,0.3);padding:6px 8px;border-radius:3px">
+                <div style="font-family:var(--font-mono);font-size:8px;color:var(--muted);margin-bottom:2px">MOUNT</div>
+                <div id="slot-mount" style="font-family:var(--font-mono);font-size:10px;color:var(--text)"></div>
+              </div>
+            </div>
+            <button class="btn btn-teal btn-full" id="acct-load-btn" onclick="acctLoadCredentials()">⬤ LOAD TO DESTINATIONS</button>
+            <div id="acct-load-msg" style="font-family:var(--font-mono);font-size:10px;text-align:center;margin-top:6px;display:none"></div>
+          </div>
+        </div>
+
+        <!-- No upcoming slots -->
+        <div id="acct-no-slots" style="display:none;text-align:center;padding:20px 0;font-family:var(--font-mono);font-size:10px;color:var(--muted)">
+          No upcoming broadcast slots.<br>
+          <a href="#" onclick="window.grooveline.openExternal('https://www.grooveline.org/broadcast')" style="color:var(--teal);text-decoration:none;margin-top:6px;display:inline-block">Book a slot →</a>
+        </div>
+
+        <!-- All upcoming bookings list -->
+        <div id="acct-all-slots" style="display:none">
+          <div style="font-family:var(--font-mono);font-size:9px;letter-spacing:2px;color:var(--muted);margin-bottom:6px">ALL UPCOMING</div>
+          <div id="acct-slots-list" style="display:flex;flex-direction:column;gap:4px"></div>
+        </div>
+
+        <!-- Refresh button -->
+        <button class="btn btn-ghost btn-full" style="margin-top:10px;font-size:10px" onclick="acctRefresh()">↻ REFRESH SLOTS</button>
+      </div>
+      </div>
+    </div>
+
+    <!-- NOW PLAYING -->
+    <div class="panel" id="panel-nowplaying">
+      <div class="panel-hdr">
+        <span class="panel-title">NOW PLAYING</span>
+        <div class="np-status-row" style="margin-bottom:0">
+          <div class="np-dot" id="np-status-dot"></div>
+          <span style="font-family:var(--font-mono);font-size:9px;color:var(--muted)" id="np-status-text">INACTIVE</span>
+        </div>
+      </div>
+
+      <div class="np-track-display">
+        <div class="np-label">NOW PLAYING</div>
+        <div class="np-artist" id="np-artist">—</div>
+        <div class="np-title" id="np-title">Waiting for track data…</div>
+        <div class="np-source-tag" id="np-source-tag"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-corner-bl"></div><div class="card-corner-br"></div>
+        <div class="card-title">SOURCE</div>
+        <div class="form-row">
+          <label class="form-label">DATA SOURCE</label>
+          <select id="np-source-type" onchange="onNpSourceTypeChange()">
+            <option value="icecast">Icecast Server (Traktor, etc)</option>
+            <option value="file">Text File (Rekordbox, Serato, VirtualDJ…)</option>
+          </select>
+        </div>
+
+        <div id="np-icecast-section">
+          <div class="form-row">
+            <label class="form-label">STATUS JSON URL</label>
+            <input type="text" id="np-icecast-url" value="http://radio.grooveline.org:8000/status-json.xsl" placeholder="http://server:8000/status-json.xsl">
+          </div>
+        </div>
+
+        <div id="np-file-section" style="display:none">
+          <div class="form-row">
+            <label class="form-label">DJ SOFTWARE</label>
+            <select id="np-software" onchange="onNpSoftwareChange()">
+              <option value="">— Select —</option>
+              <option value="nowplaying">Now Playing App (Rekordbox / all)</option>
+              <option value="serato">Serato DJ</option>
+              <option value="virtualdj">VirtualDJ</option>
+              <option value="traktor">Traktor</option>
+            </select>
+          </div>
+
+          <!-- Now Playing App guide -->
+          <div id="np-rekordbox-guide" style="display:none;background:rgba(0,212,200,0.05);border:1px solid rgba(0,212,200,0.18);border-radius:6px;padding:12px;margin-bottom:8px">
+            <div style="font-family:var(--font-display);font-size:9px;color:var(--teal);letter-spacing:2px;margin-bottom:8px">SETUP — NOW PLAYING APP</div>
+            <div style="font-size:11px;line-height:1.8;color:rgba(220,230,255,0.8)">
+              1. Download the free <strong style="color:var(--teal)">Now Playing</strong> app from <span style="color:var(--teal);font-family:var(--font-mono);font-size:10px">nowplayingapp.com</span><br>
+              2. Open it — it auto-detects Rekordbox, no config needed<br>
+              3. It automatically writes track info to a hidden folder:<br>
+              <span style="font-family:var(--font-mono);font-size:10px;color:var(--teal);background:rgba(0,0,0,0.3);padding:2px 6px;border-radius:3px;display:inline-block;margin:4px 0">~/.nowplaying/</span><br>
+              4. Click <strong style="color:var(--teal)">AUTO-DETECT</strong> below — the app will find the file for you
+            </div>
+          </div>
+
+          <div class="form-row">
+            <label class="form-label">FILE PATH
+              <span id="np-autodetect-status" style="margin-left:8px;font-size:9px;color:var(--teal)"></span>
+            </label>
+            <div style="display:flex;gap:6px">
+              <input type="text" id="np-filepath" placeholder="Click AUTO-DETECT or paste path" style="flex:1;font-size:11px">
+              <button class="btn btn-teal btn-sm" onclick="autoDetectNpFile()" id="np-auto-btn" title="Find file automatically">AUTO-DETECT</button>
+              <button class="btn btn-ghost btn-sm" onclick="browseNpFile()" title="Browse manually">…</button>
+            </div>
+          </div>
+          <div class="form-hint" id="np-filepath-hint" style="margin-top:4px;font-size:10px"></div>
+        </div>
+
+        <div class="toggle-row">
+          <span class="toggle-label">OBS OVERLAY (localhost:4242)</span>
+          <label class="toggle"><input type="checkbox" id="np-overlay"><div class="toggle-track"></div></label>
+        </div>
+      </div>
+
+      <div style="display:flex;gap:6px;margin-bottom:6px">
+        <button class="btn btn-teal" style="flex:1" id="np-btn" onclick="toggleNowPlaying()">▶ START TRACKING</button>
+        <button class="btn btn-ghost btn-sm" onclick="testNpFile()" title="Read file now and show raw content">TEST FILE</button>
+      </div>
+      <div id="np-log"></div>
+    </div><!-- /panel-nowplaying -->
+
+    <!-- STREAM LOG -->
+    <div class="panel" id="panel-log">
+      <div class="panel-hdr">
+        <span class="panel-title">STREAM LOG</span>
+        <div style="display:flex;gap:6px">
+          <button class="btn btn-ghost btn-sm" onclick="copyLog()">COPY</button>
+          <button class="btn btn-ghost btn-sm" onclick="clearLog()">CLEAR</button>
+        </div>
+      </div>
+      <div id="log-output"></div>
+    </div>
+
+  </div><!-- /main -->
+</div><!-- /app -->
+
+<!-- Quit overlay -->
+<div id="overlay">
+  <div class="overlay-box">
+    <div class="ov-corner-bl"></div><div class="ov-corner-br"></div>
+    <div class="overlay-title">STOP STREAM &amp; QUIT?</div>
+    <div class="overlay-msg">Stream is live. Closing will cut your broadcast.</div>
+    <div class="overlay-btns">
+      <button class="btn btn-ghost" id="ov-cancel">CANCEL</button>
+      <button class="btn btn-coral" id="ov-quit">QUIT</button>
+    </div>
+  </div>
+</div>
+
+<!-- SOUND CHECK (1.3.0) — one button, no passwords. The app fetches the DJ's
+     private /check-* mount from their account and asks OUR server whether the
+     audio arrived. See the SOUND CHECK block in the script. -->
+<div id="check-modal">
+  <div class="overlay-box check-box">
+    <div class="ov-corner-bl"></div><div class="ov-corner-br"></div>
+    <div class="overlay-title" style="color:var(--teal)">SOUND CHECK</div>
+    <div class="chk-line">Private test: nobody hears it, nothing is recorded or posted.</div>
+
+    <div id="chk-signin" style="display:none">
+      <div class="chk-line">Sign in with your <strong>grooveline.org</strong> account. That's all, no passwords or mount points to copy.</div>
+      <input type="email" id="chk-email" placeholder="you@example.com" autocomplete="email">
+      <input type="password" id="chk-password" placeholder="Password" autocomplete="current-password" onkeydown="if(event.key==='Enter')checkSignIn()">
+      <div class="chk-err" id="chk-signin-err"></div>
+      <button class="btn btn-teal btn-full" id="chk-signin-btn" onclick="checkSignIn()">SIGN IN</button>
+      <div class="chk-hint">No account? <a href="#" onclick="openGrooveline();return false;" style="color:var(--teal);text-decoration:none">grooveline.org</a></div>
+    </div>
+
+    <div id="chk-ready" style="display:none">
+      <div class="chk-line">Testing input: <strong id="chk-input-name">—</strong> · <a href="#" onclick="checkChangeInput();return false;">change</a><br>Play some music, then press START.</div>
+      <div class="chk-err" id="chk-ready-err"></div>
+      <button class="btn btn-teal btn-full" id="chk-start-btn" onclick="startAppCheck()">▶ START TEST</button>
+    </div>
+
+    <div id="chk-running" style="display:none">
+      <div class="chk-state" id="chk-state">CONNECTING…</div>
+      <div class="chk-line" id="chk-detail"></div>
+      <div id="chk-listen-wrap" style="display:none;margin-bottom:10px">
+        <button class="btn btn-ghost btn-full" id="chk-listen-btn" onclick="toggleAppCheckListen()">▶ LISTEN</button>
+        <div class="chk-hint">Use headphones. If your computer's sound output is a virtual cable (BlackHole, VB-Cable), don't press Listen, or the stream loops back into itself. You hear yourself a few seconds late.</div>
+      </div>
+      <button class="btn btn-coral btn-full" onclick="endAppCheck(true)">■ STOP TEST</button>
+    </div>
+
+    <button class="btn btn-ghost btn-full" style="margin-top:8px" onclick="closeCheckModal()">CLOSE</button>
+    <audio id="chk-audio" preload="none" onended="appCheckListenReset()" onerror="appCheckListenReset()"></audio>
+  </div>
+</div>
+
+<script>
+// ── Platform templates ───────────────────────────────────────────
+const PLATFORMS = [
+  { type:'youtube',   name:'YouTube Live',  icon:'▶', color:'#FF0000', rtmpBase:'rtmp://a.rtmp.youtube.com/live2/',          fields:['streamKey'] },
+  { type:'twitch',    name:'Twitch',        icon:'◈', color:'#9146FF', rtmpBase:'rtmp://live.twitch.tv/app/',                fields:['streamKey'] },
+  { type:'mixcloud',  name:'Mixcloud Live', icon:'♫', color:'#5000FF', rtmpBase:'rtmp://broadcast.mixcloud.com/broadcast/',  fields:['streamKey'] },
+  { type:'facebook',  name:'Facebook Live', icon:'f', color:'#1877F2', rtmpBase:'rtmps://live-api-s.facebook.com:443/rtmp/', fields:['streamKey'] },
+  { type:'icecast',   name:'Icecast',       icon:'❄', color:'#00d4c8', fields:['server','mount','password'] },
+  { type:'mediamtx',  name:'MediaMTX (HLS)',icon:'📹', color:'#00d4c8', rtmpBase:'rtmp://46.224.177.15:1935/live/',            fields:['streamKey'] },
+  { type:'shoutcast', name:'SHOUTcast',     icon:'📻',color:'#FF6B00', fields:['server','password'] },
+  { type:'custom',    name:'Custom RTMP',   icon:'⚙', color:'#888',    fields:['rtmpUrl'] },
+];
+const QUALITY_PRESETS = {
+  audio:  { videoBitrate:'0',    audioBitrate:'192k', videoSize:'640x360',   fps:30, audioOnly:true  },
+  low:    { videoBitrate:'300k', audioBitrate:'192k', videoSize:'640x360',   fps:30, audioOnly:false },
+  medium: { videoBitrate:'1000k',audioBitrate:'256k', videoSize:'1280x720',  fps:30, audioOnly:false },
+  high:   { videoBitrate:'2000k',audioBitrate:'320k', videoSize:'1280x720',  fps:30, audioOnly:false },
+};
+
+// ── State ──────────────────────────────────────────────────────────
+let cfg = { profiles:[], audioDevice:'', videoDevice:'', audioOnly:true,
+  quality:{ audioBitrate:'320k', videoBitrate:'0', videoSize:'1280x720', fps:30, nativeSampleRate:44100 }, volume:100 };
+let isLive = false, liveSeconds = 0, liveTimer = null;
+let appCheck = null; // running sound check: { mount, host, profile, poll, received, started }
+let previewStream = null, audioCtx = null, analyser = null, gainNode = null, animFrame = null, previewOn = false;
+let platform = '';
+// PCM streaming state — Web Audio → ffmpeg stdin, no BlackHole required (macOS audio-only)
+let pcmStreamActive = false, pcmAudioCtx = null, pcmScriptNode = null, pcmOwnStream = null;
+// Canvas video capture state — getUserMedia video → canvas → IPC → ffmpeg stdin
+let canvasCapStream = null, canvasCapVideo = null, canvasCapCtx = null, canvasCapCanvas = null, canvasCapAF = null;
+
+// ── Boot ───────────────────────────────────────────────────────────
+window.addEventListener('DOMContentLoaded', async () => {
+  buildVU();
+  cfg = await window.grooveline.loadConfig();
+  if (!cfg.profiles) cfg.profiles = [];
+  platform = await window.grooveline.getPlatform();
+  applyUI();
+  await populateDevices();
+  renderDests();
+  bind();
+  checkFFmpeg();
+  window.grooveline.onStreamLog(({ type, msg }) => {
+    if (!msg) return;
+    if (msg.includes('[sox]') && type !== 'error') return;
+    if (msg.includes('[Icecast]') && msg.includes('Stream #0:0 ->')) return;
+    if (msg.startsWith('CMD:')) { console.log('[CMD]', msg); return; }
+    addLog(msg, type);
+  });
+  window.grooveline.onStreamStats(({ bitrate }) => { if (bitrate) document.getElementById('stat-bitrate').textContent = bitrate + ' kbps'; });
+  window.grooveline.onStreamStopped(() => { if (pcmStreamActive) { pcmStreamActive = false; if (pcmScriptNode) { try { pcmScriptNode.disconnect(); } catch {} pcmScriptNode = null; } if (pcmAudioCtx) { pcmAudioCtx.close().catch(()=>{}); pcmAudioCtx = null; } if (pcmOwnStream) { pcmOwnStream.getTracks().forEach(t=>t.stop()); pcmOwnStream = null; } } stopCanvasCapture(); setLive(false); });
+  // 1.2.0: a dropped connection no longer ends the show — the main process
+  // retries until STOP, and the status shows it instead of going IDLE.
+  window.grooveline.onStreamReconnecting(({ attempt, delay }) => {
+    const st = document.getElementById('stat-status');
+    st.textContent = `RECONNECTING (${attempt}) ↻ ${delay}s`; st.style.color = 'var(--gold)';
+    document.getElementById('stat-bitrate').textContent = '— kbps';
+  });
+  window.grooveline.onStreamReconnected(() => {
+    const st = document.getElementById('stat-status');
+    st.textContent = appCheck ? 'TESTING (private) ●' : 'LIVE ●'; st.style.color = appCheck ? 'var(--gold)' : 'var(--coral)';
+  });
+  window.grooveline.onConfirmClose(() => document.getElementById('overlay').classList.add('show'));
+  addLog('Ready. Choose sources, hit PREVIEW to check levels, then GO LIVE.', 'info');
+});
+
+// ── Config ─────────────────────────────────────────────────────────
+function applyUI() {
+  document.getElementById('q-vbr').value = cfg.quality.videoBitrate || '1000k';
+  if (cfg.quality.audioBitrate) document.getElementById('q-abr').value = cfg.quality.audioBitrate;
+  document.getElementById('q-res').value = cfg.quality.videoSize    || '1280x720';
+  document.getElementById('q-fps').value = cfg.quality.fps          || 30;
+  if (cfg.quality.nativeSampleRate) document.getElementById('q-samplerate').value = String(cfg.quality.nativeSampleRate);
+  document.getElementById('vol-slider').value = cfg.volume || 100;
+  document.getElementById('vol-val').textContent = (cfg.volume || 100) + '%';
+  updateAudioOnly();
+}
+
+function saveCfg() {
+  cfg.npSoftware  = document.getElementById('np-software')?.value  || cfg.npSoftware;
+  cfg.npFilePath  = document.getElementById('np-filepath')?.value  || cfg.npFilePath;
+  cfg.npSourceType= document.getElementById('np-source-type')?.value || cfg.npSourceType;
+  cfg.audioDevice    = document.getElementById('audio-device').value;
+  cfg.audioChannels  = document.getElementById('audio-channels').value;
+  cfg.videoDevice    = document.getElementById('video-device').value;
+  const vsel2 = document.getElementById('video-device');
+  const selOpt = vsel2.options[vsel2.selectedIndex];
+  cfg.videoDeviceIndex = selOpt && selOpt.dataset.avIndex !== undefined ? String(selOpt.dataset.avIndex) : '0';
+  cfg.videoDeviceName  = selOpt ? (selOpt.dataset.dsName || (selOpt.textContent || '').replace(/\s*\([0-9a-f]{4}:[0-9a-f]{4}\)/gi, '').trim()) : '';
+  cfg.audioOnly      = !cfg.profiles.some(p => p.enabled && p.type === 'mediamtx');
+  cfg.quality = {
+    videoBitrate:     document.getElementById('q-vbr').value || '0',
+    audioBitrate:     document.getElementById('q-abr').value || '320k',
+    videoSize:        document.getElementById('q-res').value || '1280x720',
+    fps:              parseInt(document.getElementById('q-fps').value) || 30,
+    nativeSampleRate: parseInt(document.getElementById('q-samplerate').value) || 44100,
+  };
+  window.grooveline.saveConfig(cfg);
+}
+
+function updateAudioOnly() {
+  // auto-detect: audio-only if no enabled video destination (mediamtx)
+  const hasVideo = cfg.profiles && cfg.profiles.some(p => p.enabled && p.type === 'mediamtx');
+  cfg.audioOnly = !hasVideo;
+  toggleVideoSection(!hasVideo);
+}
+
+function toggleVideoSection(ao) {
+  document.getElementById('video-row').style.display = ao ? 'none' : '';
+  document.getElementById('video-quality-section').style.display = ao ? 'none' : '';
+}
+
+// ── Devices ────────────────────────────────────────────────────────
+async function populateDevices() {
+  try {
+    const tmp = await navigator.mediaDevices.getUserMedia({ audio:true, video:true })
+      .catch(() => navigator.mediaDevices.getUserMedia({ audio:true }).catch(()=>null));
+    if (tmp) tmp.getTracks().forEach(t => t.stop());
+
+    const devs = await navigator.mediaDevices.enumerateDevices();
+    const asel = document.getElementById('audio-device');
+    const vsel = document.getElementById('video-device');
+    const osel = document.getElementById('output-device-list');
+    const savedA = cfg.audioDevice, savedV = cfg.videoDevice;
+
+    asel.innerHTML = '<option value="">Default Microphone</option>';
+    vsel.innerHTML = '<option value="">Default Camera</option>';
+    osel.innerHTML = '<option value="">— Default Output —</option>';
+
+    // Deduplicate by normalized label — macOS exposes the same physical device multiple times
+    // (once standalone, once per Aggregate Device it belongs to). Keep first occurrence.
+    const normLabel = s => s.toLowerCase().replace(/\s+/g, ' ').trim();
+    const seenLabels = { audioinput: new Set(), videoinput: new Set(), audiooutput: new Set() };
+
+    let outputCount = 0, defaultInputLabel = '';
+    devs.forEach(d => {
+      const label = d.label || (d.kind === 'audioinput' ? 'Mic ' : d.kind === 'audiooutput' ? 'Out ' : 'Camera ') + d.deviceId.slice(0,6);
+      // Skip "Default - X" entries — covered by the "Default Microphone" option,
+      // but remember X so that option can be tied to the real ffmpeg device.
+      if (d.kind === 'audioinput' && label.startsWith('Default - ')) { defaultInputLabel = label.slice(10); return; }
+      if (d.kind in seenLabels) {
+        const key = normLabel(label);
+        if (seenLabels[d.kind].has(key)) return; // skip duplicate
+        seenLabels[d.kind].add(key);
+      }
+      const o = document.createElement('option');
+      o.value = d.deviceId;
+      o.textContent = label;
+      if (d.kind === 'audioinput') asel.appendChild(o);
+      else if (d.kind === 'videoinput') vsel.appendChild(o);
+      else if (d.kind === 'audiooutput') { osel.appendChild(o); outputCount++; }
+    });
+
+    try {
+      const { devices: ffDevices, videoDevices: ffVideoDevices } = await window.grooveline.listAudioDevices();
+      const norm = s => s.replace(/\s*\([0-9a-f]{4}:[0-9a-f]{4}\)/gi, '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
+      // Tag each browser video option with its AVFoundation/dshow index by name matching
+      if (ffVideoDevices && ffVideoDevices.length) {
+        Array.from(vsel.options).forEach(o => {
+          if (!o.value) { o.dataset.avIndex = '0'; o.dataset.dsName = ''; return; }
+          const match = ffVideoDevices.find(v =>
+            norm(v.name) === norm(o.textContent) ||
+            norm(v.name).includes(norm(o.textContent)) ||
+            norm(o.textContent).includes(norm(v.name))
+          );
+          o.dataset.avIndex = match ? String(match.index) : '0';
+          o.dataset.dsName  = match ? match.name : '';
+        });
+
+        // Add video devices from ffmpeg that the browser didn't enumerate
+        // (e.g. Blackmagic DeckLink, capture cards — not exposed via getUserMedia)
+        const existingVideoLabels = Array.from(vsel.options).map(o => norm(o.textContent));
+        ffVideoDevices.forEach(v => {
+          if (existingVideoLabels.some(l => l === norm(v.name) || l.includes(norm(v.name)) || norm(v.name).includes(l))) return;
+          const o = document.createElement('option');
+          o.value = `ffmpeg-video:${v.index}`;
+          o.textContent = v.name;
+          o.dataset.avIndex = String(v.index);
+          o.dataset.dsName  = v.name;
+          vsel.appendChild(o);
+        });
+      }
+      // Tag each browser audio option with its AVFoundation/dshow index by name matching,
+      // then remove options that share the same underlying device (same av index = same physical device).
+      const seenAvIndex = new Set();
+      Array.from(asel.options).forEach(o => {
+        if (!o.value) return; // keep the "Default Microphone" placeholder
+        const match = ffDevices.find(d =>
+          norm(d.name) === norm(o.textContent) ||
+          norm(d.name).includes(norm(o.textContent)) ||
+          norm(o.textContent).includes(norm(d.name))
+        );
+        if (match) {
+          if (seenAvIndex.has(match.index)) { o.remove(); return; }
+          seenAvIndex.add(match.index);
+          o.dataset.ffmpegIndex = match.index;
+          o.dataset.ffmpegName  = match.name;
+        } else if (platform === 'darwin' && ffDevices.length > 0) { // renderer has no `process` — this used to throw and abort the tagging
+          // On macOS every real CoreAudio device appears in AVFoundation.
+          // If a browser entry has no AVFoundation match it's a Chromium alias — remove it.
+          o.remove();
+        }
+      });
+
+      // Tie the "Default Microphone" option to the system default's real ffmpeg name
+      if (defaultInputLabel && asel.options[0]) {
+        const dm = ffDevices.find(d => norm(d.name) === norm(defaultInputLabel)) ||
+                   ffDevices.find(d => norm(d.name).includes(norm(defaultInputLabel)) || norm(defaultInputLabel).includes(norm(d.name)));
+        if (dm) { asel.options[0].dataset.ffmpegIndex = dm.index; asel.options[0].dataset.ffmpegName = dm.name; }
+      }
+
+      // Add AVFoundation devices not matched by any browser entry
+      const remainingLabels = Array.from(asel.options).map(o => norm(o.textContent));
+      ffDevices.forEach(d => {
+        if (remainingLabels.some(l => l === norm(d.name) || l.includes(norm(d.name)) || norm(d.name).includes(l))) return;
+        const o = document.createElement('option');
+        o.value = `ffmpeg:${d.index}`;
+        const nameLower = d.name.toLowerCase();
+        const isLoopback = nameLower.includes('blackhole') || nameLower.includes('soundflower') ||
+          nameLower.includes('loopback') || nameLower.includes('virtual') || nameLower.includes('cable');
+        o.textContent = d.name + (isLoopback ? ' ↺' : '');
+        o.dataset.ffmpegIndex = d.index;
+        o.dataset.ffmpegName = d.name;
+        asel.appendChild(o);
+      });
+    } catch(e) {}
+
+    document.getElementById('output-devices-section').style.display = 'block';
+    if (savedA) asel.value = savedA;
+    if (savedV) vsel.value = savedV;
+    saveCfg(); // lock in avIndex/dsName for the restored selection
+
+    osel.onchange = async () => {
+      const monitorAudio = document.getElementById('monitor-audio');
+      if (monitorAudio && typeof monitorAudio.setSinkId === 'function') {
+        try { await monitorAudio.setSinkId(osel.value || ''); } catch(e) {}
+      }
+    };
+
+    const aC = asel.options.length - 1; // exclude "Default Microphone"
+    const vC = vsel.options.length - 1; // exclude "Default Camera"
+    addLog(`Devices: ${aC} audio in, ${outputCount} audio out, ${vC} video`, 'success');
+
+    await probeAndBuildChannelPicker(savedA || '');
+
+    const ok = await startPreview();
+    previewOn = ok;
+    const btn = document.getElementById('preview-btn');
+    if (ok) { btn.textContent = '■ STOP'; btn.classList.add('active'); }
+  } catch(e) { addLog('Device scan error: ' + e.message, 'warn'); }
+}
+
+async function probeAndBuildChannelPicker(deviceId) {
+  const tag   = document.getElementById('ch-count-tag');
+  const sel   = document.getElementById('audio-channels');
+  const hint  = document.getElementById('ch-hint');
+  const saved = cfg.audioChannels || '0,1';
+  const asel  = document.getElementById('audio-device');
+  const deviceLabel = asel.options[asel.selectedIndex]?.text || '';
+
+  tag.textContent = '…';
+  sel.innerHTML = '<option disabled>Detecting…</option>';
+
+  let channelCount = 2, deviceIndex = 0;
+  try {
+    const { devices } = await window.grooveline.listAudioDevices();
+    if (devices.length > 0) {
+      const selectedOpt = asel.options[asel.selectedIndex];
+      const ffmpegName = selectedOpt && selectedOpt.dataset.ffmpegName;
+      let match;
+      if (ffmpegName) match = devices.find(d => d.name === ffmpegName);
+      if (!match) {
+        const labelLower = deviceLabel.toLowerCase().replace(/\s+/g,' ').trim();
+        match = devices.find(d => d.name.toLowerCase().replace(/\s+/g,' ').trim() === labelLower) ||
+                devices.find(d => labelLower.includes(d.name.toLowerCase()) || d.name.toLowerCase().includes(labelLower));
+      }
+      if (!match) match = devices[0];
+      deviceIndex = match.index;
+      cfg.audioDeviceIndex = deviceIndex;
+      cfg.audioDeviceName  = match.name;
+      const result = await window.grooveline.probeAudioChannels({ deviceIndex, deviceName: match.name });
+      channelCount = result.channels || 2;
+      // Save the device's actual sample rate so recording uses the correct input rate
+      if (result.nativeSampleRate) {
+        cfg.quality = cfg.quality || {};
+        cfg.quality.nativeSampleRate = result.nativeSampleRate;
+        const srEl = document.getElementById('q-samplerate');
+        if (srEl) {
+          // Add the option if it doesn't exist in the select
+          const srStr = String(result.nativeSampleRate);
+          if (!Array.from(srEl.options).some(o => o.value === srStr)) {
+            const opt = document.createElement('option');
+            opt.value = srStr;
+            opt.textContent = srStr + ' Hz (device)';
+            srEl.appendChild(opt);
+          }
+          srEl.value = srStr;
+        }
+        saveCfg();
+      }
+      addLog(`${match.name} — ${channelCount}ch @ ${result.nativeSampleRate || 44100}Hz`, 'success');
+    }
+  } catch(e) { addLog('Channel probe failed, defaulting 2ch', 'warn'); }
+
+  tag.textContent = `${channelCount}CH`;
+  sel.innerHTML = '';
+  for (let i = 0; i < channelCount; i += 2) {
+    const r = Math.min(i+1, channelCount-1);
+    const o = document.createElement('option');
+    o.value = `${i},${r}`;
+    o.textContent = `Ch ${i+1}+${r+1}`;
+    sel.appendChild(o);
+  }
+  sel.value = [...sel.options].some(o => o.value === saved) ? saved : sel.options[0]?.value || '0,1';
+  cfg.audioChannels = sel.value;
+  hint.style.display = channelCount > 2 ? 'block' : 'none';
+  if (channelCount > 2) hint.textContent = `${channelCount} inputs — pick the pair your audio is on.`;
+}
+
+function onChChange() { cfg.audioChannels = document.getElementById('audio-channels').value; saveCfg(); }
+
+// ── Preview ────────────────────────────────────────────────────────
+function teardown() {
+  if (animFrame)     { cancelAnimationFrame(animFrame); animFrame = null; }
+  if (audioCtx)      { audioCtx.close().catch(()=>{}); audioCtx = null; analyser = null; gainNode = null; }
+  // Null srcObject BEFORE stopping tracks — forces Chromium to release camera pipeline immediately
+  const vid = document.getElementById('preview-video');
+  vid.srcObject = null; vid.style.display = 'none';
+  if (previewStream) { previewStream.getTracks().forEach(t=>t.stop()); previewStream = null; }
+  setVU(0, 0);
+  document.getElementById('preview-ph').style.display = '';
+  document.getElementById('vu-src').textContent = 'no source';
+}
+
+function stopCanvasCapture() {
+  if (canvasCapAF) {
+    if (canvasCapVideo && canvasCapVideo.cancelVideoFrameCallback) {
+      try { canvasCapVideo.cancelVideoFrameCallback(canvasCapAF); } catch {}
+    } else {
+      cancelAnimationFrame(canvasCapAF);
+    }
+    canvasCapAF = null;
+  }
+  if (canvasCapStream) {
+    if (canvasCapStream._mediaRecorder) {
+      try { canvasCapStream._mediaRecorder.stop(); } catch {}
+      canvasCapStream._mediaRecorder = null;
+    }
+    canvasCapStream.getTracks().forEach(t => t.stop());
+    canvasCapStream = null;
+  }
+  if (canvasCapVideo) { canvasCapVideo.srcObject = null; canvasCapVideo = null; }
+  canvasCapCtx = null; canvasCapCanvas = null;
+  // Reset preview video element
+  const previewVid = document.getElementById('preview-video');
+  if (previewVid) { previewVid.srcObject = null; previewVid.style.display = 'none'; }
+  document.getElementById('preview-ph').style.display = '';
+}
+
+async function startCanvasCapture(videoDeviceId, quality) {
+  stopCanvasCapture();
+  const sz = quality.videoSize || '1280x720';
+  const [w, h] = sz.split('x').map(Number);
+  const fps = quality.fps || 30;
+  const frameInterval = 1000 / fps;
+
+  const constraints = {
+    video: videoDeviceId
+      ? { deviceId: { exact: videoDeviceId }, width: { ideal: w }, height: { ideal: h }, frameRate: { ideal: fps } }
+      : { width: { ideal: w }, height: { ideal: h }, frameRate: { ideal: fps } },
+    audio: false
+  };
+
+  try {
+    canvasCapStream = await navigator.mediaDevices.getUserMedia(constraints);
+  } catch(e) {
+    addLog('✗ Camera capture failed: ' + e.message, 'error');
+    return false;
+  }
+
+  // Hidden video element to receive camera stream
+  canvasCapVideo = document.createElement('video');
+  canvasCapVideo.autoplay = true;
+  canvasCapVideo.muted = true;
+  canvasCapVideo.playsInline = true;
+  canvasCapVideo.srcObject = canvasCapStream;
+  await canvasCapVideo.play().catch(() => {});
+
+  // Also show in preview element
+  const previewVid = document.getElementById('preview-video');
+  previewVid.srcObject = canvasCapStream;
+  previewVid.style.display = 'block';
+  document.getElementById('preview-ph').style.display = 'none';
+
+  // Offscreen canvas — camera frames drawn here, captureStream pulls them for MediaRecorder
+  canvasCapCanvas = document.createElement('canvas');
+  canvasCapCanvas.width = w;
+  canvasCapCanvas.height = h;
+  canvasCapCtx = canvasCapCanvas.getContext('2d');
+
+  // Use canvas.captureStream → MediaRecorder to get browser-encoded video chunks.
+  // MediaRecorder produces webm/vp8 chunks which ffmpeg reads via stdin as -f webm.
+  const captureStream = canvasCapCanvas.captureStream(fps);
+
+  // Draw camera frames to canvas — use requestVideoFrameCallback so we draw exactly
+  // once per camera frame (not at monitor refresh rate), reducing pixel buffer pool pressure.
+  if (canvasCapVideo.requestVideoFrameCallback) {
+    function drawLoop() {
+      try { canvasCapCtx.drawImage(canvasCapVideo, 0, 0, w, h); } catch(e) {}
+      canvasCapAF = canvasCapVideo.requestVideoFrameCallback(drawLoop);
+    }
+    canvasCapAF = canvasCapVideo.requestVideoFrameCallback(drawLoop);
+  } else {
+    // fallback for older Electron builds
+    let lastFrame = 0;
+    function drawLoop(ts) {
+      canvasCapAF = requestAnimationFrame(drawLoop);
+      if (ts - lastFrame < frameInterval) return;
+      lastFrame = ts;
+      try { canvasCapCtx.drawImage(canvasCapVideo, 0, 0, w, h); } catch(e) {}
+    }
+    canvasCapAF = requestAnimationFrame(drawLoop);
+  }
+
+  // MediaRecorder encodes canvas stream → sends chunks via IPC
+  const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp8')
+    ? 'video/webm;codecs=vp8'
+    : 'video/webm';
+  const videoBitrate = parseInt(cfg.quality.videoBitrate || '1000k') * 1000;
+  const mr = new MediaRecorder(captureStream, { mimeType, videoBitsPerSecond: videoBitrate });
+  mr.ondataavailable = (e) => {
+    if (e.data && e.data.size > 0) {
+      e.data.arrayBuffer().then(buf => {
+        window.grooveline.sendVideoChunk(buf);
+      });
+    }
+  };
+  mr.start(100); // 100ms chunks — low latency
+  canvasCapStream._mediaRecorder = mr; // keep ref for cleanup
+
+  addLog(`Camera capture started: ${w}x${h} @ ${fps}fps (${mimeType})`, 'success');
+  return true;
+}
+
+async function startPreview() {
+  teardown();
+  const audioId   = document.getElementById('audio-device').value;
+  const videoId   = document.getElementById('video-device').value;
+  const audioOnly = cfg.audioOnly;
+
+  // Skip ffmpeg: prefix devices — use default for preview
+  const effectiveAudioId = audioId.startsWith('ffmpeg:') ? '' : audioId;
+  // ffmpeg-video: devices (e.g. DeckLink) can't be used with getUserMedia — ffmpeg handles them directly
+  const effectiveVideoId = (!videoId || videoId.startsWith('ffmpeg-video:')) ? '' : videoId;
+
+  const sz = cfg.quality.videoSize || '1280x720';
+  const [pvW, pvH] = sz.split('x').map(Number);
+  const pvFps = cfg.quality.fps || 30;
+  const videoConstraint = !audioOnly && effectiveVideoId
+    ? { deviceId: { exact: effectiveVideoId }, width: { ideal: pvW }, height: { ideal: pvH }, frameRate: { ideal: pvFps } }
+    : !audioOnly
+    ? { width: { ideal: pvW }, height: { ideal: pvH }, frameRate: { ideal: pvFps } }
+    : false;
+
+  const constraints = {
+    audio: effectiveAudioId
+      ? { deviceId: { exact: effectiveAudioId }, sampleRate: 48000, channelCount: 2, echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+      : { sampleRate: 48000, channelCount: 2, echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+    video: videoConstraint
+  };
+
+  try {
+    previewStream = await navigator.mediaDevices.getUserMedia(constraints);
+  } catch(e) {
+    const el = document.getElementById('preview-err');
+    el.textContent = e.name === 'NotFoundError' ? 'Device not found.' : e.name === 'NotAllowedError' ? 'Permission denied.' : e.message;
+    el.classList.add('show');
+    setTimeout(() => el.classList.remove('show'), 6000);
+    addLog('Preview failed: ' + e.message, 'error');
+    return false;
+  }
+
+  // Show camera live video in preview element
+  if (!audioOnly) {
+    const previewVid = document.getElementById('preview-video');
+    previewVid.srcObject = previewStream;
+    previewVid.style.display = 'block';
+    document.getElementById('preview-ph').style.display = 'none';
+  }
+
+  const aTracks = previewStream.getAudioTracks();
+  if (aTracks.length > 0) {
+    const lbl = aTracks[0].label || 'audio source';
+    document.getElementById('vu-src').textContent = lbl.length > 18 ? lbl.slice(0,16)+'…' : lbl;
+
+    // Use high quality AudioContext — 48kHz, no processing
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000, latencyHint: 'interactive' });
+    const src = audioCtx.createMediaStreamSource(previewStream);
+
+    gainNode = audioCtx.createGain();
+    gainNode.gain.value = (cfg.volume || 100) / 100;
+
+    const splitter = audioCtx.createChannelSplitter(2);
+    const analyserL = audioCtx.createAnalyser();
+    const analyserR = audioCtx.createAnalyser();
+    analyserL.fftSize = 512; analyserL.smoothingTimeConstant = 0.75;
+    analyserR.fftSize = 512; analyserR.smoothingTimeConstant = 0.75;
+
+    src.connect(gainNode);
+    gainNode.connect(splitter);
+    splitter.connect(analyserL, 0);
+    splitter.connect(analyserR, 1);
+    analyser = analyserL;
+    runVULoop(analyserL, analyserR);
+
+    // Route monitor audio via <audio> element only — supports setSinkId for output device routing
+    // Do NOT also connect to audioCtx.destination or you get double playback / feedback
+    const monitorAudio = document.getElementById('monitor-audio');
+    if (monitorAudio) monitorAudio.srcObject = previewStream;
+
+    addLog('Preview: ' + lbl, 'success');
+  }
+
+  document.getElementById('preview-err').classList.remove('show');
+
+
+
+  return true;
+}
+
+// ── Web Audio recording via MediaRecorder ───────────────────────────────────
+// Streams webm chunks to main process via IPC as they arrive.
+// Main process writes them to a .webm temp file, converts on stop.
+let mediaRecorder = null;
+
+function attachRecorderTap() {
+  const src = previewStream || pcmOwnStream;
+  if (!src) { addRecLog('✗ No audio stream'); return false; }
+  // Use audio-only stream — video tracks cause MediaRecorder to fail with audio/webm
+  const audioTracks = src.getAudioTracks();
+  if (!audioTracks.length) { addRecLog('✗ No audio tracks'); return false; }
+  const stream = new MediaStream(audioTracks);
+  const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+    ? 'audio/webm;codecs=opus' : 'audio/webm';
+  try {
+    mediaRecorder = new MediaRecorder(stream, { mimeType, audioBitsPerSecond: 256000 });
+  } catch(e) {
+    addRecLog('✗ MediaRecorder failed: ' + e.message); return false;
+  }
+  mediaRecorder.ondataavailable = (e) => {
+    if (e.data && e.data.size > 0) {
+      e.data.arrayBuffer().then(buf => {
+        window.grooveline.sendRecChunk(new Uint8Array(buf));
+      });
+    }
+  };
+  mediaRecorder.onerror = (e) => addRecLog('✗ Recorder error: ' + e.error?.message);
+  mediaRecorder.start(500); // chunk every 500ms
+  return true;
+}
+
+function detachRecorderTap() {
+  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+    mediaRecorder.stop();
+  }
+  mediaRecorder = null;
+}
+
+function runVULoop(analyserL, analyserR) {
+  const bufL = new Uint8Array(analyserL.frequencyBinCount);
+  const bufR = new Uint8Array(analyserR.frequencyBinCount);
+  const tick = () => {
+    analyserL.getByteTimeDomainData(bufL);
+    analyserR.getByteTimeDomainData(bufR);
+    const rmsL = Math.sqrt(bufL.reduce((s,v) => s + ((v-128)/128)**2, 0) / bufL.length);
+    const rmsR = Math.sqrt(bufR.reduce((s,v) => s + ((v-128)/128)**2, 0) / bufR.length);
+    setVU(Math.min(100, rmsL * 500), Math.min(100, rmsR * 500));
+    animFrame = requestAnimationFrame(tick);
+  };
+  tick();
+}
+
+async function togglePreview() {
+  const btn = document.getElementById('preview-btn');
+  if (previewOn) {
+    teardown(); previewOn = false;
+    btn.textContent = '▶ PREVIEW'; btn.classList.remove('active');
+  } else {
+    btn.textContent = '…';
+    const ok = await startPreview(); previewOn = ok;
+    btn.textContent = ok ? '■ STOP' : '▶ PREVIEW';
+    if (ok) btn.classList.add('active'); else btn.classList.remove('active');
+  }
+}
+
+async function onAudioDeviceChange() {
+  const deviceId = document.getElementById('audio-device').value;
+  await probeAndBuildChannelPicker(deviceId);
+  saveCfg();
+  if (!previewOn || isLive) return;
+  const ok = await startPreview();
+  if (!ok) { previewOn = false; document.getElementById('preview-btn').textContent = '▶ PREVIEW'; document.getElementById('preview-btn').classList.remove('active'); }
+}
+
+async function onSourceChange() {
+  saveCfg();
+  if (!previewOn || isLive) return;
+  const ok = await startPreview();
+  if (!ok) { previewOn = false; document.getElementById('preview-btn').textContent = '▶ PREVIEW'; document.getElementById('preview-btn').classList.remove('active'); }
+}
+
+// ── VU Meter ───────────────────────────────────────────────────────
+function buildVU() {
+  ['vu-L','vu-R'].forEach(id => {
+    const el = document.getElementById(id); el.innerHTML = '';
+    for (let i=0;i<20;i++) {
+      const b = document.createElement('div');
+      b.className = 'vu-bar';
+      b.style.height = (16+i*2)+'%';
+      el.appendChild(b);
+    }
+  });
+}
+function setVU(L, R) {
+  [['vu-L',L],['vu-R',R]].forEach(([id,lvl]) => {
+    document.getElementById(id).querySelectorAll('.vu-bar').forEach((b,i) => {
+      const on = lvl > (i/20*100);
+      b.style.background = on ? (i<13?'var(--teal)':i<17?'var(--gold)':'var(--coral)') : 'rgba(0,212,200,0.08)';
+    });
+  });
+}
+
+// ── Bind ───────────────────────────────────────────────────────────
+function bind() {
+  document.getElementById('btn-minimize').onclick = () => window.grooveline.minimizeWindow();
+  document.getElementById('btn-maximize').onclick = () => window.grooveline.maximizeWindow();
+  document.getElementById('btn-close').onclick    = () => window.grooveline.closeWindow();
+  document.getElementById('ov-cancel').onclick    = () => document.getElementById('overlay').classList.remove('show');
+  document.getElementById('ov-quit').onclick      = () => window.grooveline.forceQuit();
+
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.onclick = () => {
+      document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
+      document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
+      btn.classList.add('active');
+      document.getElementById('panel-'+btn.dataset.tab).classList.add('active');
+    };
+  });
+
+  document.getElementById('preview-btn').onclick    = togglePreview;
+  document.getElementById('audio-device').onchange  = onAudioDeviceChange;
+  document.getElementById('video-device').onchange  = onSourceChange;
+  // audio-only is auto-detected from profiles — no manual toggle needed
+
+  const volSlider = document.getElementById('vol-slider');
+  const updateFill = el => { const pct = ((el.value-el.min)/(el.max-el.min)*100).toFixed(1)+'%'; el.style.setProperty('--range-pct', pct); };
+  volSlider.oninput = (e) => {
+    const pct = parseInt(e.target.value);
+    document.getElementById('vol-val').textContent = pct + '%';
+    cfg.volume = pct;
+    if (gainNode) gainNode.gain.value = pct / 100;
+    updateFill(e.target); saveCfg();
+  };
+  updateFill(volSlider);
+
+  document.getElementById('refresh-btn').onclick = async () => { await populateDevices(); if (previewOn) await startPreview(); };
+  ['q-vbr','q-res','q-fps','q-abr','q-samplerate'].forEach(id => { document.getElementById(id).onchange = saveCfg; });
+  document.getElementById('btn-go-live').onclick  = toggleLive;
+  document.getElementById('add-dest-btn').onclick = showAddMenu;
+}
+
+// ── Destinations ───────────────────────────────────────────────────
+function renderDests() {
+  const list = document.getElementById('dest-list');
+  list.innerHTML = '';
+  cfg.profiles.forEach((p,i) => {
+    const tmpl = PLATFORMS.find(t=>t.type===p.type) || PLATFORMS[6];
+    const card = document.createElement('div');
+    card.className = 'dest-card'+(p.enabled?' enabled':'')+(p._open?' open':'');
+    card.innerHTML = `
+      <div class="dest-card-hdr">
+        <label class="toggle" onclick="event.stopPropagation()">
+          <input type="checkbox" class="dest-cb" ${p.enabled?'checked':''}><div class="toggle-track"></div>
+        </label>
+        <span class="dest-icon">${tmpl.icon}</span>
+        <span class="dest-name" style="color:${p.enabled?tmpl.color:'var(--muted)'}">${p.name||tmpl.name}</span>
+        <span class="dest-chev">▼</span>
+      </div>
+      <div class="dest-fields">
+        ${buildFields(p,tmpl,i)}
+        <div style="display:flex;justify-content:flex-end;margin-top:6px">
+          <button class="remove-btn" onclick="removeDest(${i})">✕ REMOVE</button>
+        </div>
+      </div>`;
+    card.querySelector('.dest-card-hdr').onclick = () => { cfg.profiles[i]._open=!cfg.profiles[i]._open; renderDests(); };
+    card.querySelector('.dest-cb').onchange = (e) => { e.stopPropagation(); cfg.profiles[i].enabled=e.target.checked; saveCfg(); updateAudioOnly(); renderDests(); };
+    list.appendChild(card);
+  });
+  document.getElementById('dest-count').textContent = cfg.profiles.filter(p=>p.enabled).length + ' enabled';
+  updateAudioOnly();
+}
+
+function buildFields(p,tmpl,i) {
+  const f = {
+    streamKey:`<div class="form-row"><label class="form-label">STREAM KEY</label><input type="password" style="font-family:var(--font-mono)" placeholder="Paste your stream key" value="${esc(p.streamKey)}" onchange="upDest(${i},'streamKey',this.value)"></div>`,
+    server:   `<div class="form-row"><label class="form-label">SERVER (host:port)</label><input type="text" placeholder="radio.grooveline.org:8000" value="${esc(p.server)}" onchange="upDest(${i},'server',this.value)"></div>`,
+    mount:    `<div class="form-row"><label class="form-label">MOUNT POINT</label><input type="text" placeholder="/stream" value="${esc(p.mount)}" onchange="upDest(${i},'mount',this.value)"></div>`,
+    password: `<div class="form-row"><label class="form-label">PASSWORD</label><input type="password" placeholder="hackme" value="${esc(p.password)}" onchange="upDest(${i},'password',this.value)"></div>`,
+    rtmpUrl:  `<div class="form-row"><label class="form-label">FULL RTMP URL + KEY</label><input type="text" placeholder="rtmp://server/live/key" value="${esc(p.rtmpUrl)}" onchange="upDest(${i},'rtmpUrl',this.value)"></div>`,
+  };
+  return tmpl.fields.map(k=>f[k]||'').join('');
+}
+
+function esc(s)        { return (s||'').replace(/"/g,'&quot;'); }
+function upDest(i,k,v) { cfg.profiles[i][k]=v; saveCfg(); }
+function removeDest(i) { cfg.profiles.splice(i,1); saveCfg(); renderDests(); }
+
+function showAddMenu() {
+  const old = document.getElementById('dest-add-menu');
+  if (old) { old.remove(); return; }
+  const menu = document.createElement('div');
+  menu.id = 'dest-add-menu';
+  PLATFORMS.forEach(tmpl => {
+    const btn = document.createElement('div');
+    btn.className = 'add-menu-item';
+    btn.innerHTML = `<span style="color:${tmpl.color};width:18px;text-align:center">${tmpl.icon}</span>${tmpl.name}`;
+    btn.onclick = () => {
+      cfg.profiles.push({ type:tmpl.type, name:tmpl.name, enabled:false, _open:true,
+        streamKey:'', server:'', mount:'', password:'', rtmpUrl:'', rtmpBase:tmpl.rtmpBase||'' });
+      saveCfg(); renderDests(); menu.remove();
+      document.querySelector('[data-tab="destinations"]').click();
+    };
+    menu.appendChild(btn);
+  });
+  document.getElementById('add-dest-btn').after(menu);
+}
+
+// ── Live ───────────────────────────────────────────────────────────
+// checkProfile: the sound check's one-off /check-* destination. It replaces the
+// enabled destinations for this run only and is never saved into cfg.
+async function toggleLive(ev, checkProfile) {
+  if (isLive) {
+    stopCanvasCapture();
+    await window.grooveline.stopStream();
+    setLive(false);
+    if (previewOn) await startPreview();
+    return;
+  }
+  saveCfg();
+  // Stop audio-only preview — canvas capture will own the camera + show preview
+  if (previewOn) {
+    // Only tear down audio side; if video preview was active it will be replaced by canvas capture
+    if (audioCtx) { audioCtx.close().catch(()=>{}); audioCtx = null; analyser = null; gainNode = null; }
+    if (animFrame) { cancelAnimationFrame(animFrame); animFrame = null; }
+    const monitorAudio = document.getElementById('monitor-audio');
+    if (monitorAudio) monitorAudio.srcObject = null;
+    // Stop preview stream audio tracks (video tracks reused by canvas if possible)
+    if (previewStream) {
+      previewStream.getAudioTracks().forEach(t => t.stop());
+      previewStream.getVideoTracks().forEach(t => t.stop());
+      previewStream = null;
+    }
+    previewOn = false;
+    document.getElementById('preview-btn').textContent = '▶ PREVIEW';
+    document.getElementById('preview-btn').classList.remove('active');
+    setVU(0, 0);
+    document.getElementById('vu-src').textContent = 'no source';
+    addLog('Preview stopped.', 'info');
+  }
+  const active = checkProfile ? [checkProfile] : cfg.profiles.filter(p=>p.enabled);
+  if (!active.length) {
+    addLog('No destinations enabled — add one in Destinations tab.', 'warn');
+    document.querySelector('[data-tab="destinations"]').click(); return;
+  }
+
+  const hasVideo = !checkProfile && !cfg.audioOnly && active.some(p => p.type !== 'icecast' && p.type !== 'shoutcast');
+
+  // Start canvas capture BEFORE ffmpeg so frames are ready when pipe opens
+  // Skip for ffmpeg-video: devices (DeckLink etc) — ffmpeg captures them directly via dshow/v4l2
+  const videoId = document.getElementById('video-device').value;
+  const isFfmpegVideo = videoId && videoId.startsWith('ffmpeg-video:');
+  if (hasVideo && platform === 'darwin' && !isFfmpegVideo) {
+    const ok = await startCanvasCapture(videoId || undefined, cfg.quality);
+    if (!ok) {
+      addLog('✗ Cannot start camera — check permissions', 'error');
+      return;
+    }
+  }
+
+  addLog(checkProfile ? 'Starting sound check (private, not on air)…' : 'Starting stream to ' + active.length + ' destination(s)…', 'live');
+
+  const r = await window.grooveline.startStream({
+    soundCheck: !!checkProfile,
+    profiles: active, quality: cfg.quality,
+    audioDevice: cfg.audioDeviceIndex !== undefined ? String(cfg.audioDeviceIndex) : cfg.audioDevice,
+    audioDeviceName: cfg.audioDeviceName || '',
+    audioChannels: cfg.audioChannels || '0,1',
+    videoDevice: cfg.videoDeviceIndex !== undefined ? cfg.videoDeviceIndex : '0',
+    videoDeviceName: cfg.videoDeviceName || '',
+    audioOnly: checkProfile ? true : cfg.audioOnly, volume: cfg.volume || 100
+  });
+  if (r.ok) {
+    setLive(true);
+  } else {
+    stopCanvasCapture();
+    addLog('✗ ' + r.error, 'error');
+  }
+}
+
+async function startWebAudioStream() {
+  const audioId = document.getElementById('audio-device').value;
+  const effectiveAudioId = audioId.startsWith('ffmpeg:') ? '' : audioId;
+  const sampleRate = cfg.quality.nativeSampleRate || 44100;
+
+  const constraints = {
+    audio: effectiveAudioId
+      ? { deviceId: { exact: effectiveAudioId }, sampleRate, channelCount: 2, echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+      : { sampleRate, channelCount: 2, echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+    video: false
+  };
+
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia(constraints);
+    pcmOwnStream = stream;
+  } catch(e) {
+    addLog('✗ Audio capture failed: ' + (e.name === 'NotFoundError' ? 'Device not found' : e.name === 'NotAllowedError' ? 'Permission denied' : e.message), 'error');
+    return false;
+  }
+
+  const active = cfg.profiles.filter(p => p.enabled);
+  const r = await window.grooveline.startPcmStream({
+    profiles: active,
+    quality: { ...cfg.quality, audioSampleRate: sampleRate },
+    volume: cfg.volume || 100,
+    audioChannels: cfg.audioChannels || '0,1'
+  });
+  if (!r.ok) {
+    stream.getTracks().forEach(t => t.stop()); pcmOwnStream = null;
+    addLog('✗ ' + r.error, 'error');
+    return false;
+  }
+
+  const parts = (cfg.audioChannels || '0,1').split(',');
+  const cL = parseInt(parts[0]) || 0;
+  const cR = parseInt(parts.length > 1 ? parts[1] : parts[0]) || 1;
+
+  // AudioWorklet runs on audio thread — avoids blocking renderer with frequent IPC sends
+  const workletSrc = `class GlPcmSender extends AudioWorkletProcessor {
+    constructor(opts) { super(); this._cL = opts.processorOptions.cL; this._cR = opts.processorOptions.cR; }
+    process(inputs) {
+      const inp = inputs[0]; if (!inp || !inp[0]) return true;
+      const nCh = inp.length;
+      const L = inp[this._cL < nCh ? this._cL : 0];
+      const R = inp[this._cR < nCh ? this._cR : 0];
+      const out = new Float32Array(L.length * 2);
+      for (let i = 0; i < L.length; i++) { out[i*2]=L[i]; out[i*2+1]=R[i]; }
+      this.port.postMessage(out, [out.buffer]);
+      return true;
+    }
+  }
+  registerProcessor('gl-pcm-sender', GlPcmSender);`;
+  const blob = new Blob([workletSrc], { type: 'application/javascript' });
+  const blobUrl = URL.createObjectURL(blob);
+
+  pcmAudioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate, latencyHint: 'playback' });
+  try {
+    await pcmAudioCtx.audioWorklet.addModule(blobUrl);
+  } catch(e) {
+    addLog('✗ AudioWorklet failed: ' + e.message, 'error');
+    pcmAudioCtx.close().catch(()=>{}); pcmAudioCtx = null;
+    stream.getTracks().forEach(t => t.stop()); pcmOwnStream = null;
+    await window.grooveline.stopPcmStream();
+    return false;
+  } finally {
+    URL.revokeObjectURL(blobUrl);
+  }
+
+  const src = pcmAudioCtx.createMediaStreamSource(stream);
+  pcmScriptNode = new AudioWorkletNode(pcmAudioCtx, 'gl-pcm-sender', { processorOptions: { cL, cR } });
+  // Accumulate ~85ms of audio before each IPC send (4096 stereo float32 samples).
+  // AudioWorklet fires every 128 samples (~375x/sec at 48kHz) — sending each chunk via IPC
+  // causes congestion and glitches. Accumulating reduces IPC calls to ~12/sec.
+  let _pcmAccum = [], _pcmAccumBytes = 0;
+  const PCM_FLUSH_BYTES = 4096 * 2 * 4; // 4096 stereo float32 frames ≈ 85ms
+  pcmScriptNode.port.onmessage = (e) => {
+    if (!pcmStreamActive) return;
+    _pcmAccum.push(e.data);
+    _pcmAccumBytes += e.data.byteLength;
+    if (_pcmAccumBytes >= PCM_FLUSH_BYTES) {
+      const merged = new Uint8Array(_pcmAccumBytes);
+      let off = 0;
+      // IMPORTANT: e.data is a Float32Array — must reinterpret as bytes via .buffer,
+      // NOT new Uint8Array(float32Array) which does element-wise conversion and destroys audio
+      for (const buf of _pcmAccum) {
+        const bytes = new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
+        merged.set(bytes, off);
+        off += bytes.byteLength;
+      }
+      window.grooveline.sendPcmChunk(merged);
+      _pcmAccum = []; _pcmAccumBytes = 0;
+    }
+  };
+  src.connect(pcmScriptNode);
+  pcmScriptNode.connect(pcmAudioCtx.createMediaStreamDestination());
+
+  pcmStreamActive = true;
+  const trackLabel = stream.getAudioTracks()[0]?.label || 'audio device';
+  addLog('Streaming via Web Audio: ' + (trackLabel.length > 40 ? trackLabel.slice(0,38)+'…' : trackLabel), 'success');
+  return true;
+}
+
+function stopWebAudioStream() {
+  pcmStreamActive = false;
+  if (pcmScriptNode) { try { pcmScriptNode.disconnect(); } catch {} pcmScriptNode = null; }
+  if (pcmAudioCtx)   { pcmAudioCtx.close().catch(()=>{}); pcmAudioCtx = null; }
+  if (pcmOwnStream)  { pcmOwnStream.getTracks().forEach(t => t.stop()); pcmOwnStream = null; }
+  window.grooveline.stopPcmStream();
+}
+
+function setLive(on) {
+  isLive = on;
+  const btn   = document.getElementById('btn-go-live');
+  const badge = document.getElementById('live-badge');
+  if (on) {
+    btn.textContent = '⏹ STOP STREAM'; btn.classList.add('live');
+    badge.classList.add('on'); liveSeconds = 0;
+    liveTimer = setInterval(() => {
+      liveSeconds++;
+      const h=String(Math.floor(liveSeconds/3600)).padStart(2,'0');
+      const m=String(Math.floor(liveSeconds%3600/60)).padStart(2,'0');
+      const s=String(liveSeconds%60).padStart(2,'0');
+      document.getElementById('live-timer').textContent=`${h}:${m}:${s}`;
+    }, 1000);
+    document.getElementById('stat-status').textContent = appCheck ? 'TESTING (private) ●' : 'LIVE ●';
+    document.getElementById('stat-status').style.color = appCheck ? 'var(--gold)' : 'var(--coral)';
+    document.getElementById('stat-streams').textContent = appCheck ? 1 : cfg.profiles.filter(p=>p.enabled).length;
+  } else {
+    // The stream ended under a running sound check (STOP, or the app gave up).
+    if (appCheck) { endAppCheck(false); setChkErr('chk-ready-err', 'The test stopped. STREAM LOG shows why.'); }
+    btn.textContent = '⬤ GO LIVE'; btn.classList.remove('live');
+    badge.classList.remove('on'); clearInterval(liveTimer);
+    document.getElementById('stat-status').textContent = 'IDLE';
+    document.getElementById('stat-status').style.color = 'var(--teal)';
+    document.getElementById('stat-bitrate').textContent = '— kbps';
+    document.getElementById('stat-streams').textContent = '0';
+  }
+}
+
+// ── FFmpeg ─────────────────────────────────────────────────────────
+async function checkFFmpeg() {
+  const r = await window.grooveline.checkFFmpeg();
+  if (!r.found) {
+    document.getElementById('ffmpeg-warn').style.display = 'block';
+    document.getElementById('ffmpeg-link').onclick = () => window.grooveline.openFFmpegHelp();
+    addLog('ffmpeg not found — install it before going live.', 'warn');
+  } else {
+    addLog(r.version || 'ffmpeg ready', 'success');
+  }
+}
+
+function addLog(msg, type='info') {
+  const out = document.getElementById('log-output');
+  const row = document.createElement('div');
+  row.className = 'log-line';
+  row.innerHTML = `<span class="log-time">${new Date().toLocaleTimeString()}</span><span class="log-msg ${type}">${msg.replace(/</g,'&lt;')}</span>`;
+  out.appendChild(row); out.scrollTop = out.scrollHeight;
+}
+function clearLog() { document.getElementById('log-output').innerHTML=''; }
+function copyLog() {
+  const text = Array.from(document.getElementById('log-output').querySelectorAll('.log-line'))
+    .map(el => el.textContent).join('\n');
+  if (!text.trim()) { addLog('Nothing to copy', 'info'); return; }
+  const fallback = () => {
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); addLog('Log copied to clipboard', 'info'); } catch {}
+    document.body.removeChild(ta);
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(() => addLog('Log copied to clipboard', 'info')).catch(fallback);
+  } else { fallback(); }
+}
+
+// ── Recording ─────────────────────────────────────────────────────
+let recFormat = 'aac';
+let recFolder = null;
+let isRecording = false;
+let recTimerInterval = null;
+let recStartTime = null;
+let lastRecPath = null;
+
+// PCM capture no longer used for recording — ffmpeg captures directly from device
+
+const fmtHints = {
+  mp3: 'MP3 — 320kbps · ~2.4MB/min · universal compatibility',
+  aac: 'AAC — 320kbps · ~2.4MB/min · better quality than MP3 at same bitrate',
+  wav: 'WAV — lossless PCM · ~10MB/min · studio quality, large files',
+  mp4: 'MP4 — AAC 320k in MP4 container · ~2.4MB/min · video player compatible'
+};
+
+function setRecFmt(fmt) {
+  if (fmt === 'mp3') return; // MP3 removed — use AAC
+  recFormat = fmt;
+  document.querySelectorAll('.fmt-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('fmt-'+fmt).classList.add('active');
+  document.getElementById('fmt-hint').textContent = fmtHints[fmt];
+}
+
+async function browseRecFolder() {
+  const folder = await window.grooveline.openFolderDialog();
+  if (folder) {
+    recFolder = folder;
+    document.getElementById('rec-folder-display').textContent = folder;
+    document.getElementById('rec-folder-display').style.color = 'var(--text)';
+    const c = await window.grooveline.loadConfig();
+    c.recordingFolder = folder;
+    await window.grooveline.saveConfig(c);
+  }
+}
+
+function addRecLog(msg) {
+  const el = document.getElementById('rec-log');
+  el.innerHTML += `<div>${msg}</div>`;
+  el.scrollTop = el.scrollHeight;
+}
+
+function updateRecTimer() {
+  const elapsed = Math.floor((Date.now() - recStartTime) / 1000);
+  const h = String(Math.floor(elapsed/3600)).padStart(2,'0');
+  const m = String(Math.floor((elapsed%3600)/60)).padStart(2,'0');
+  const s = String(elapsed%60).padStart(2,'0');
+  document.getElementById('rec-timer').textContent = `${h}:${m}:${s}`;
+}
+
+function flashRecordBtn(msg) {
+  const btn = document.getElementById('btn-record');
+  const prev = btn.textContent;
+  btn.textContent = msg;
+  btn.style.color = '#ff4444';
+  setTimeout(() => { btn.textContent = isRecording ? 'STOP REC' : 'RECORD'; btn.style.color = isRecording ? '#ff6666' : '#555'; }, 2500);
+}
+
+function setRecordingUI(active) {
+  const btn = document.getElementById('btn-record');
+  const timer = document.getElementById('rec-timer');
+  if (active) {
+    btn.textContent = 'STOP REC';
+    btn.style.background = 'rgba(204,0,0,0.35)';
+    btn.style.borderColor = '#cc3333';
+    btn.style.color = '#ff6666';
+    timer.style.visibility = 'visible';
+  } else {
+    btn.textContent = 'RECORD';
+    btn.style.background = 'rgba(20,20,30,0.8)';
+    btn.style.borderColor = '#333';
+    btn.style.color = '#555';
+    timer.style.visibility = 'hidden';
+    timer.textContent = '';
+  }
+}
+
+async function toggleRecording() {
+  if (isRecording) {
+    isRecording = false;
+    clearInterval(recTimerInterval);
+    setRecordingUI(false);
+    detachRecorderTap();
+    window.grooveline.stopRecording();
+    return;
+  }
+
+  // Reset any stale backend state before starting
+  await window.grooveline.stopRecording();
+
+  if (!recFolder) {
+    try {
+      const home = await window.grooveline.getHomeDir();
+      recFolder = home + '/Music';
+    } catch(e) { flashRecordBtn('SET FOLDER'); return; }
+  }
+
+  // Determine recording mode:
+  // - pcm: sox live audio-only → tap PCM chunks
+  // - hls: live video → pull from HLS stream
+  // - avf: not live, video selected → direct AVFoundation capture via ffmpeg
+  // - webm: not live, audio-only → MediaRecorder
+  const usePcmTap = isLive && !pcmStreamActive && cfg.audioOnly;
+  const useHlsRec = isLive && !pcmStreamActive && !cfg.audioOnly;
+  const useAvfRec = !isLive && !cfg.audioOnly && recFormat === 'mp4';
+
+  if (!usePcmTap && !useHlsRec && !useAvfRec) {
+    // webm/aac mode — need audio stream for MediaRecorder
+    if (!previewStream && !pcmOwnStream) {
+      const audioId = document.getElementById('audio-device').value;
+      const effectiveId = audioId.startsWith('ffmpeg:') ? '' : audioId;
+      const constraints = {
+        audio: effectiveId
+          ? { deviceId: { exact: effectiveId }, echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+          : { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+        video: false
+      };
+      try {
+        const s = await navigator.mediaDevices.getUserMedia(constraints);
+        previewStream = s;
+        previewOn = true;
+        document.getElementById('preview-btn').textContent = '■ STOP';
+        document.getElementById('preview-btn').classList.add('active');
+      } catch(e) { flashRecordBtn('NO SOURCE'); return; }
+    }
+    const tapOk = attachRecorderTap();
+    if (!tapOk) { flashRecordBtn('NO AUDIO'); return; }
+  }
+
+  // For HLS recording, find the stream key from the active video profile
+  let hlsUrl = '';
+  if (useHlsRec) {
+    const mtxProfile = cfg.profiles.find(p => p.enabled && p.type === 'mediamtx');
+    if (mtxProfile && mtxProfile.streamKey) {
+      hlsUrl = `https://stream.grooveline.org/live/${mtxProfile.streamKey}/index.m3u8`;
+    } else {
+      flashRecordBtn('NO STREAM KEY');
+      return;
+    }
+  }
+
+  const recMode = usePcmTap ? 'pcm' : useHlsRec ? 'hls' : useAvfRec ? 'avf' : 'webm';
+  const result = await window.grooveline.startRecording({
+    format: recFormat,
+    folder: recFolder,
+    mode: recMode,
+    sampleRate: cfg.quality.nativeSampleRate || 44100,
+    audioDevice: useHlsRec ? hlsUrl : (cfg.audioDeviceIndex !== undefined ? String(cfg.audioDeviceIndex) : cfg.audioDevice),
+    videoDevice: cfg.videoDeviceIndex || '0',
+    audioOnly: cfg.audioOnly,
+    quality: cfg.quality,
+  });
+
+  if (!result.ok) { if (recMode === 'webm') detachRecorderTap(); flashRecordBtn('ERROR'); addRecLog('✗ ' + result.error); return; }
+
+  isRecording = true;
+  recStartTime = Date.now();
+  setRecordingUI(true);
+  recTimerInterval = setInterval(updateRecTimer, 1000);
+  addRecLog(`${recFormat.toUpperCase()} — recording…`);
+}
+
+function showRecInFolder() { if (lastRecPath) window.grooveline.showInFolder(lastRecPath); }
+
+window.grooveline.onRecordingLog(({ msg }) => addRecLog(msg));
+window.grooveline.onRecordingStopped(({ path: p, error }) => {
+  isRecording = false;
+  clearInterval(recTimerInterval);
+  setRecordingUI(false);
+  if (p) {
+    lastRecPath = p;
+    const savedEl = document.getElementById('rec-saved');
+    savedEl.classList.add('show');
+    document.getElementById('rec-saved-path').textContent = p.split('/').pop();
+    addRecLog('✓ Saved: ' + p.split('/').pop());
+  }
+  if (error) addRecLog('✗ Error: ' + error);
+});
+
+(async () => {
+  const c = await window.grooveline.loadConfig();
+  if (c.recordingFolder) {
+    recFolder = c.recordingFolder;
+  } else {
+    // default to ~/Music
+    try {
+      const home = await window.grooveline.getHomeDir();
+      recFolder = home + '/Music';
+      window.grooveline.saveConfig({ ...c, recordingFolder: recFolder });
+    } catch(e) {}
+  }
+  if (recFolder) {
+    document.getElementById('rec-folder-display').textContent = recFolder;
+    document.getElementById('rec-folder-display').style.color = 'var(--text)';
+  }
+})();
+
+// ── Now Playing ────────────────────────────────────────────────────
+const NP_DEFAULTS = {
+  nowplaying: {
+    path: '',  // auto-detected via detect-nowplaying-path
+    hint: 'Default path — check Now Playing app settings for the exact location on your machine'
+  },
+  serato: {
+    path: `~/Music/Serato/History/Sessions`,
+    hint: 'Serato writes track history here — use the latest session file'
+  },
+  virtualdj: {
+    path: `~/Documents/VirtualDJ/nowplaying.txt`,
+    hint: 'Enable "Now Playing" file output in VirtualDJ settings first'
+  }
+};
+
+let npRunning = false, npIcecastInterval = null, npLastTitle = '', npPollTimer = null, npLastFileTitle = '', npLastFileArtist = '';
+
+function onNpSourceTypeChange() {
+  const type = document.getElementById('np-source-type').value;
+  document.getElementById('np-icecast-section').style.display = type === 'icecast' ? '' : 'none';
+  document.getElementById('np-file-section').style.display    = type === 'file'    ? '' : 'none';
+}
+
+function onNpSoftwareChange(forceDefault) {
+  const sw = document.getElementById('np-software').value;
+  const guide = document.getElementById('np-rekordbox-guide');
+  if (guide) guide.style.display = (sw === 'nowplaying') ? '' : 'none';
+  const autoBtn = document.getElementById('np-auto-btn');
+  if (autoBtn) autoBtn.style.display = (sw === 'nowplaying') ? '' : 'none';
+  const hintEl = document.getElementById('np-filepath-hint');
+  if (hintEl) hintEl.textContent = NP_DEFAULTS[sw]?.hint || '';
+  if (!sw) return;
+  // Only set default path if field is currently empty OR forceDefault is true
+  // Never wipe a path the user already has
+  const fpEl = document.getElementById('np-filepath');
+  const def = NP_DEFAULTS[sw];
+  if (def && def.path && (forceDefault || !fpEl.value.trim())) {
+    fpEl.value = def.path;
+  }
+}
+
+async function browseNpFile() {
+  const f = await window.grooveline.openFileDialog();
+  if (f) document.getElementById('np-filepath').value = f;
+}
+
+function addNpLog(msg) {
+  const el = document.getElementById('np-log');
+  el.innerHTML += `<div>${msg}</div>`;
+  el.scrollTop = el.scrollHeight;
+}
+
+function showNpTrack(track, source) {
+  document.getElementById('np-artist').textContent = track.artist || '—';
+  document.getElementById('np-title').textContent  = track.title  || 'Unknown';
+  document.getElementById('np-source-tag').textContent = source || '';
+  addNpLog(`♫ ${track.artist ? track.artist+' — ' : ''}${track.title}`);
+}
+
+async function pollIcecast() {
+  const url = document.getElementById('np-icecast-url').value.trim();
+  try {
+    const res = await fetch(url);
+    const json = await res.json();
+    const src = json?.icestats?.source;
+    if (!src) { addNpLog('No active source on Icecast'); return; }
+    const title  = src.title  || '';
+    const artist = src.artist || '';
+    const combined = artist ? `${artist} — ${title}` : title;
+    if (combined && combined !== npLastTitle) { npLastTitle = combined; showNpTrack({ title, artist }, 'ICECAST'); }
+  } catch(e) { addNpLog('Poll error: ' + e.message); }
+}
+
+async function toggleNowPlaying() {
+  if (npRunning) {
+    if (npIcecastInterval) { clearInterval(npIcecastInterval); npIcecastInterval = null; }
+    await window.grooveline.stopNpWatcher();
+    npRunning = false; npLastTitle = ''; npLastFileTitle = ''; npLastFileArtist = '';
+    if (npPollTimer) { clearInterval(npPollTimer); npPollTimer = null; }
+    document.getElementById('np-btn').textContent = '▶ START TRACKING';
+    document.getElementById('np-btn').className = 'btn btn-teal btn-full';
+    document.getElementById('np-status-dot').style.background = 'var(--border)';
+    document.getElementById('np-status-text').textContent = 'INACTIVE';
+    addNpLog('Stopped.');
+    return;
+  }
+
+  const type    = document.getElementById('np-source-type').value;
+  const overlay = document.getElementById('np-overlay').checked;
+
+  if (type === 'icecast') {
+    const url = document.getElementById('np-icecast-url').value.trim();
+    if (!url) { addNpLog('Enter Icecast URL first.'); return; }
+    npRunning = true;
+    document.getElementById('np-btn').textContent = '⏹ STOP TRACKING';
+    document.getElementById('np-btn').className = 'btn btn-coral btn-full';
+    document.getElementById('np-status-dot').style.background = 'var(--teal)';
+    document.getElementById('np-status-text').textContent = 'ACTIVE';
+    await pollIcecast();
+    npIcecastInterval = setInterval(pollIcecast, 5000);
+    if (overlay) {
+      await window.grooveline.startNpWatcher({ filePath:'', software:'icecast', overlay:true });
+      addNpLog('OBS overlay: http://localhost:4242');
+    }
+  } else {
+    const software = document.getElementById('np-software').value;
+    const filePath = document.getElementById('np-filepath').value.trim();
+    if (!software) { addNpLog('Select DJ software first.'); return; }
+    if (!filePath)  { addNpLog('Set file path first.'); return; }
+    // Save the current path/software so it persists across restarts
+    cfg.npSoftware = software; cfg.npFilePath = filePath; cfg.npSourceType = 'file';
+    saveCfg();
+    const result = await window.grooveline.startNpWatcher({ filePath, software, overlay });
+    if (!result.ok) { addNpLog('✗ ' + result.error); return; }
+    npRunning = true;
+    document.getElementById('np-btn').textContent = '⏹ STOP TRACKING';
+    document.getElementById('np-btn').className = 'btn btn-coral btn-full';
+    document.getElementById('np-status-dot').style.background = 'var(--teal)';
+    document.getElementById('np-status-text').textContent = 'ACTIVE';
+    addNpLog('Watching: ' + (result.resolvedPath || filePath).split('/').pop());
+    if (overlay) addNpLog('OBS overlay: http://localhost:4242');
+    // Display initial track directly from response
+    addNpLog('Track data: ' + JSON.stringify(result.initialTrack));
+    if (result.initialTrack && (result.initialTrack.title || result.initialTrack.artist)) {
+      showNpTrack(result.initialTrack, 'FILE');
+    } else {
+      addNpLog('⚠ No track parsed — is music playing in your DJ app?');
+    }
+    // Poll every 3s for track changes (backup to fs.watch events)
+    if (npPollTimer) clearInterval(npPollTimer);
+    npPollTimer = setInterval(async () => {
+      if (!npRunning) { clearInterval(npPollTimer); return; }
+      const t = await window.grooveline.getNpCurrent();
+      if (t && t.title && (t.title !== npLastFileTitle || t.artist !== npLastFileArtist)) {
+        npLastFileTitle = t.title; npLastFileArtist = t.artist;
+        showNpTrack(t, 'FILE');
+      }
+    }, 3000);
+  }
+}
+
+async function testNpFile() {
+  const filePath = document.getElementById('np-filepath').value.trim();
+  if (!filePath) { addNpLog('⚠ No file path set — use AUTO-DETECT first'); return; }
+  addNpLog('--- TEST FILE READ ---');
+  const r = await window.grooveline.readNpFileRaw(filePath);
+  if (!r.ok) {
+    addNpLog('✗ ' + r.error);
+    return;
+  }
+  addNpLog(`Path: ${r.path}`);
+  addNpLog(`Size: ${r.size} bytes, Lines: ${r.lineCount}`);
+  r.allLines.forEach((l, i) => addNpLog(`L${r.lineCount - r.allLines.length + i + 1}: ${l}`));
+  addNpLog('--- File read OK. Click START TRACKING to activate. ---');
+}
+
+async function autoDetectNpFile() {
+  const btn = document.getElementById('np-auto-btn');
+  const statusEl = document.getElementById('np-autodetect-status');
+  const hintEl = document.getElementById('np-filepath-hint');
+  if (btn) btn.textContent = '…';
+  try {
+    const result = await window.grooveline.detectNowPlayingPath();
+    if (result.file) {
+      document.getElementById('np-filepath').value = result.file;
+      if (statusEl) statusEl.textContent = '✓ Found';
+      if (hintEl) hintEl.textContent = result.file;
+      // Save it
+      cfg.npFilePath = result.file;
+      saveCfg();
+    } else if (result.dirExists) {
+      if (statusEl) statusEl.textContent = '⚠ Folder found but empty';
+      if (hintEl) hintEl.innerHTML = `The <code style="color:var(--teal)">~/.nowplaying/</code> folder exists but has no files yet. Open Now Playing app and play a track in Rekordbox first.`;
+    } else {
+      if (statusEl) statusEl.textContent = '✗ Not found';
+      if (hintEl) hintEl.innerHTML = `<strong style="color:var(--coral)">~/.nowplaying/ folder not found.</strong> Make sure Now Playing app is installed and has run at least once.<br>
+        <span style="color:var(--muted)">To find it manually in Finder: press <kbd style="background:rgba(255,255,255,0.1);padding:1px 5px;border-radius:3px">⌘ Shift .</kbd> to show hidden files, then navigate to your home folder → .nowplaying</span>`;
+    }
+  } catch(e) {
+    if (statusEl) statusEl.textContent = '✗ Error';
+    if (hintEl) hintEl.textContent = e.message;
+  }
+  if (btn) btn.textContent = 'AUTO-DETECT';
+}
+
+window.grooveline.onNpLog(({ msg }) => addNpLog(msg));
+window.grooveline.onNpTrack((track) => showNpTrack(track, 'FILE'));
+
+(async () => {
+  const c = await window.grooveline.loadConfig();
+  if (c.npSourceType) { document.getElementById('np-source-type').value = c.npSourceType; onNpSourceTypeChange(); }
+  if (c.npIcecastUrl) document.getElementById('np-icecast-url').value = c.npIcecastUrl;
+  // Restore filepath BEFORE calling onNpSoftwareChange so it doesn't get wiped
+  if (c.npFilePath)   document.getElementById('np-filepath').value    = c.npFilePath;
+  if (c.npSoftware) { document.getElementById('np-software').value    = c.npSoftware; onNpSoftwareChange(); }
+  if (c.npOverlay)    document.getElementById('np-overlay').checked   = true;
+})();
+
+// ─── Grooveline Account ───────────────────────────────────────────────────────
+let acctToken = null;
+let acctUser = null;
+let acctBookings = [];
+let acctCountdownTimer = null;
+let acctNextBooking = null;
+
+// Persist token across sessions via config
+(async () => {
+  const c = await window.grooveline.loadConfig();
+  if (c._acctToken && c._acctToken.length > 10) {
+    acctToken = c._acctToken;
+    acctRestoreSession();
+  }
+})();
+
+async function acctRestoreSession() {
+  try {
+    const res = await window.grooveline.apiMe({ token: acctToken });
+    if (res.status !== 200) { acctToken = null; return; }
+    acctUser = res.body;
+    acctShowLoggedIn();
+    await acctFetchBookings();
+  } catch(e) {
+    acctToken = null;
+  }
+}
+
+async function acctLogin() {
+  const email = document.getElementById('acct-email').value.trim();
+  const password = document.getElementById('acct-password').value;
+  const errEl = document.getElementById('acct-login-error');
+  const btn = document.getElementById('acct-login-btn');
+
+  if (!email || !password) {
+    acctShowError('Please enter your email and password.'); return;
+  }
+  btn.textContent = 'SIGNING IN…';
+  btn.disabled = true;
+  errEl.style.display = 'none';
+
+  try {
+    // Quick IPC sanity check
+    const ping = await window.grooveline.apiPing();
+    if (!ping || !ping.ok) {
+      acctShowError('IPC error: main process not responding');
+      btn.textContent = 'SIGN IN'; btn.disabled = false;
+      return;
+    }
+  } catch(e) {
+    acctShowError('IPC failed: ' + e.message);
+    btn.textContent = 'SIGN IN'; btn.disabled = false;
+    return;
+  }
+
+  try {
+    const res = await window.grooveline.apiLogin({ email, password });
+    const data = res.body;
+    if (res.status !== 200) {
+      acctShowError(data.error || 'Login failed. Check your email and password.');
+      btn.textContent = 'SIGN IN'; btn.disabled = false;
+      return;
+    }
+    acctToken = data.token;
+    acctUser = data.user;
+    // Persist token
+    const c = await window.grooveline.loadConfig();
+    c._acctToken = acctToken;
+    await window.grooveline.saveConfig(c);
+    // saveCfg() writes the whole cfg object: without this, the next GO LIVE
+    // saved the config without the token and the DJ was signed out on restart.
+    cfg._acctToken = acctToken;
+
+    acctShowLoggedIn();
+    await acctFetchBookings();
+  } catch(e) {
+    acctShowError('Error: ' + (e && e.message ? e.message : JSON.stringify(e)));
+  }
+  btn.textContent = 'SIGN IN'; btn.disabled = false;
+}
+
+async function acctLogout() {
+  acctToken = null;
+  acctUser = null;
+  acctBookings = [];
+  acctNextBooking = null;
+  clearInterval(acctCountdownTimer);
+  // Remove token from config
+  if (appCheck) await endAppCheck(true);
+  const c = await window.grooveline.loadConfig();
+  delete c._acctToken;
+  await window.grooveline.saveConfig(c);
+  delete cfg._acctToken;
+  // Reset UI
+  document.getElementById('acct-login-section').style.display = '';
+  document.getElementById('acct-loggedin-section').style.display = 'none';
+  document.getElementById('acct-email').value = '';
+  document.getElementById('acct-password').value = '';
+  document.getElementById('acct-tier-badge').style.display = 'none';
+}
+
+async function acctFetchBookings() {
+  if (!acctToken) return;
+  try {
+    const res = await window.grooveline.apiBookings({ token: acctToken });
+    console.log('[bookings] status:', res.status, 'body:', JSON.stringify(res.body));
+    if (res.status !== 200) return;
+    const data = res.body;
+    const raw = Array.isArray(data) ? data : (data.bookings || data.slots || []);
+    const now = Date.now();
+    acctBookings = raw
+      .map(b => ({
+        ...b,
+        // API returns slot_start / slot_end
+        id:               b.id,
+        start_time:       b.slot_start || b.start_time || b.startTime,
+        end_time:         b.slot_end   || b.end_time   || b.endTime,
+        icecast_host:     b.icecast_host     || b.icecastHost     || 'radio.grooveline.org',
+        mount_point:      b.mount_point      || b.mountPoint      || '/stream',
+        icecast_username: b.icecast_username || b.icecastUsername || 'source',
+        source_password:  b.icecast_password || b.source_password || b.sourcePassword || '',
+      }))
+      .filter(b => b.end_time ? new Date(b.end_time).getTime() > now : true)
+      .sort((a, b) => new Date(a.start_time) - new Date(b.start_time));
+    renderBookings();
+  } catch(e) { console.error('[bookings] error:', e); }
+}
+
+async function acctRefresh() {
+  const btn = document.querySelector('#panel-destinations-account .btn-full:last-child');
+  if (btn) { btn.textContent = '↻ REFRESHING…'; btn.disabled = true; }
+  await acctFetchBookings();
+  if (btn) { btn.textContent = '↻ REFRESH SLOTS'; btn.disabled = false; }
+}
+
+function acctShowLoggedIn() {
+  document.getElementById('acct-login-section').style.display = 'none';
+  document.getElementById('acct-loggedin-section').style.display = '';
+  if (acctUser) {
+    document.getElementById('acct-dj-name').textContent = (acctUser.dj_name || acctUser.email || '').toUpperCase();
+    document.getElementById('acct-dj-email').textContent = acctUser.email || '';
+    const badge = document.getElementById('acct-tier-badge');
+    badge.style.display = '';
+    badge.textContent = (acctUser.tier || 'free').toUpperCase();
+    badge.className = acctUser.tier === 'pro' ? 'pro' : 'free';
+    badge.id = 'acct-tier-badge';
+  }
+}
+
+// ── SOUND CHECK (1.3.0) ───────────────────────────────────────────────
+// One button, no passwords: the DJ's private /check-* mount comes from their
+// account (GET /check/mount, the same mount as the website's sound check) and
+// the answer comes from OUR Icecast (GET /check/status), never from ffmpeg
+// saying "connected". The check destination is a one-off override passed to
+// toggleLive — never saved into cfg — and main.js refuses a check stream to
+// anything but a single /check-* mount, so a test can't go on air.
+function showEl(id, on) { const el = document.getElementById(id); if (el) el.style.display = on ? '' : 'none'; }
+function setChkErr(id, msg) { const el = document.getElementById(id); if (el) el.textContent = msg || ''; }
+function setChkState(cls, title, detail) {
+  const st = document.getElementById('chk-state');
+  st.className = 'chk-state' + (cls ? ' ' + cls : '');
+  st.textContent = title;
+  document.getElementById('chk-detail').textContent = detail || '';
+}
+function renderCheckModal() {
+  showEl('chk-signin', !acctToken && !appCheck);
+  showEl('chk-ready', !!acctToken && !appCheck);
+  showEl('chk-running', !!appCheck);
+  const sel = document.getElementById('audio-device');
+  const opt = sel && sel.options[sel.selectedIndex];
+  document.getElementById('chk-input-name').textContent = opt ? opt.textContent : 'default input';
+}
+function openCheckModal() {
+  if (isLive && !appCheck) { addLog('Stop your stream before running a sound check.', 'warn'); return; }
+  setChkErr('chk-ready-err', ''); setChkErr('chk-signin-err', '');
+  document.getElementById('check-modal').classList.add('show');
+  renderCheckModal();
+}
+async function closeCheckModal() {
+  if (appCheck) await endAppCheck(true);
+  document.getElementById('check-modal').classList.remove('show');
+}
+async function checkChangeInput() {
+  await closeCheckModal();
+  document.querySelector('[data-tab="sources"]').click();
+}
+async function checkSignIn() {
+  // Reuse the account panel's sign-in so both stay in sync.
+  document.getElementById('acct-email').value = document.getElementById('chk-email').value;
+  document.getElementById('acct-password').value = document.getElementById('chk-password').value;
+  const btn = document.getElementById('chk-signin-btn');
+  btn.disabled = true; btn.textContent = 'SIGNING IN…';
+  await acctLogin();
+  btn.disabled = false; btn.textContent = 'SIGN IN';
+  document.getElementById('chk-password').value = '';
+  document.getElementById('acct-password').value = '';
+  if (!acctToken) setChkErr('chk-signin-err', document.getElementById('acct-login-error').textContent || 'Sign-in failed.');
+  renderCheckModal();
+}
+async function startAppCheck() {
+  if (isLive) { setChkErr('chk-ready-err', 'Stop your stream first.'); return; }
+  setChkErr('chk-ready-err', '');
+  const btn = document.getElementById('chk-start-btn');
+  btn.disabled = true; btn.textContent = 'PREPARING…';
+  let res;
+  try { res = await window.grooveline.apiCheckMount({ token: acctToken }); }
+  catch (e) { res = { status: 0, body: { error: 'Network error: ' + e.message } }; }
+  btn.disabled = false; btn.textContent = '▶ START TEST';
+  if (res.status === 401) { await acctLogout(); renderCheckModal(); setChkErr('chk-signin-err', 'Your sign-in expired. Sign in again.'); return; }
+  const d = res.body || {};
+  if (res.status !== 200 || !d.mount_point) { setChkErr('chk-ready-err', d.error || 'Could not prepare your test mount.'); return; }
+  const host = d.server || 'radio.grooveline.org';
+  const profile = {
+    type: 'icecast', name: 'Sound check (private)', enabled: true,
+    server: String(d.port || '8000') === '8000' ? host : `${host}:${d.port}`,
+    mount: d.mount_point, username: d.username || 'source', password: d.password,
+  };
+  appCheck = { mount: d.mount_point, host, profile, poll: null, received: false, started: Date.now() };
+  renderCheckModal();
+  setChkState('', 'CONNECTING…', 'Starting your input and connecting to our server.');
+  await toggleLive(null, profile);
+  if (!appCheck) return;            // stopped meanwhile
+  if (!isLive) {                    // refused or failed to launch — the log says why
+    await endAppCheck(false);
+    setChkErr('chk-ready-err', 'Could not start the test. STREAM LOG shows why.');
+    return;
+  }
+  appCheck.poll = setInterval(pollAppCheck, 3000);
+  pollAppCheck();
+}
+async function pollAppCheck() {
+  const c = appCheck;
+  if (!c) return;
+  let res;
+  try { res = await window.grooveline.apiCheckStatus({ token: acctToken }); } catch { return; }
+  if (appCheck !== c) return;
+  if (res.status === 401) { setChkState('warn', 'SIGNED OUT', 'Your sign-in expired. Stop the test and sign in again.'); return; }
+  const d = res.body || {};
+  if (d.receiving) {
+    const bits = [d.codec, d.bitrate ? d.bitrate + ' kbps' : null].filter(Boolean).join(' · ');
+    setChkState('on', '✓ OUR SERVER HEARS YOU', 'Your setup works' + (bits ? ' (' + bits + ')' : '') + '. Press LISTEN to hear exactly what we receive.');
+    showEl('chk-listen-wrap', true);
+    if (!c.received) { c.received = true; addLog('Sound check: our server is receiving your audio.', 'success'); }
+  } else {
+    showEl('chk-listen-wrap', false);
+    stopAppCheckListen();
+    const secs = Math.round((Date.now() - c.started) / 1000);
+    setChkState('', 'WAITING FOR YOUR AUDIO…', secs < 90
+      ? 'The first time, your test mount needs up to a minute to be ready. The app keeps trying by itself.'
+      : `Still nothing after ${secs} s. Check that the right input is picked in SOURCES. STREAM LOG shows what the app is doing.`);
+  }
+}
+async function endAppCheck(stopStream) {
+  const c = appCheck;
+  if (!c) return;
+  appCheck = null;                  // first, so setLive(false) doesn't re-enter
+  clearInterval(c.poll);
+  stopAppCheckListen();
+  showEl('chk-listen-wrap', false);
+  if (stopStream && isLive) await toggleLive();
+  renderCheckModal();
+}
+function toggleAppCheckListen() {
+  const a = document.getElementById('chk-audio');
+  if (a.getAttribute('src')) { stopAppCheckListen(); return; }
+  if (!appCheck) return;
+  const btn = document.getElementById('chk-listen-btn');
+  btn.textContent = 'CONNECTING…';
+  a.src = 'https://' + appCheck.host + appCheck.mount + '?t=' + Date.now();
+  a.play().then(() => { btn.textContent = '■ STOP LISTENING'; }).catch(() => stopAppCheckListen());
+}
+function stopAppCheckListen() {
+  const a = document.getElementById('chk-audio');
+  if (a && a.getAttribute('src')) { a.pause(); a.removeAttribute('src'); a.load(); }
+  appCheckListenReset();
+}
+// Ended or failed (stream gone): only reset the button — load() from an error
+// handler could loop.
+function appCheckListenReset() {
+  const btn = document.getElementById('chk-listen-btn');
+  if (btn) btn.textContent = '▶ LISTEN';
+}
+
+function acctShowError(msg) {
+  const el = document.getElementById('acct-login-error');
+  el.textContent = msg;
+  el.style.display = '';
+}
+
+function renderBookings() {
+  const nextEl = document.getElementById('acct-next-slot');
+  const noEl = document.getElementById('acct-no-slots');
+  const allEl = document.getElementById('acct-all-slots');
+  const listEl = document.getElementById('acct-slots-list');
+
+  clearInterval(acctCountdownTimer);
+
+  if (acctBookings.length === 0) {
+    nextEl.style.display = 'none';
+    noEl.style.display = '';
+    allEl.style.display = 'none';
+    return;
+  }
+
+  noEl.style.display = 'none';
+  acctNextBooking = acctBookings[0];
+
+  // Populate next slot card
+  const start = new Date(acctNextBooking.start_time);
+  const end = new Date(acctNextBooking.end_time);
+  document.getElementById('slot-date').textContent = start.toLocaleDateString('en-GB', { weekday:'short', day:'numeric', month:'short' }).toUpperCase();
+  document.getElementById('slot-time').textContent = `${fmtTime(start)} – ${fmtTime(end)}`;
+  document.getElementById('slot-server').textContent = acctNextBooking.icecast_host || 'radio.grooveline.org';
+  document.getElementById('slot-mount').textContent = acctNextBooking.mount_point || '/stream';
+  document.getElementById('acct-load-msg').style.display = 'none';
+  nextEl.style.display = '';
+
+  // Countdown
+  function updateCountdown() {
+    const now = Date.now();
+    const startMs = new Date(acctNextBooking.start_time).getTime();
+    const endMs = new Date(acctNextBooking.end_time).getTime();
+    const el = document.getElementById('slot-countdown');
+    if (!el) return;
+    // Guard against invalid dates
+    if (isNaN(startMs) || isNaN(endMs)) {
+      el.textContent = '—';
+      el.style.color = 'var(--muted)';
+      return;
+    }
+    if (now < startMs) {
+      const diff = startMs - now;
+      el.textContent = 'IN ' + fmtDuration(diff);
+      el.style.color = 'var(--gold)';
+    } else if (now < endMs) {
+      const diff = endMs - now;
+      el.textContent = 'LIVE — ' + fmtDuration(diff) + ' LEFT';
+      el.style.color = 'var(--coral)';
+    } else {
+      el.textContent = 'ENDED';
+      el.style.color = 'var(--muted)';
+    }
+  }
+  updateCountdown();
+  acctCountdownTimer = setInterval(updateCountdown, 10000);
+
+  // All upcoming list (if more than 1)
+  if (acctBookings.length > 1) {
+    listEl.innerHTML = '';
+    acctBookings.slice(1).forEach((b, i) => {
+      const s = new Date(b.start_time);
+      const row = document.createElement('div');
+      row.className = 'acct-slot-row';
+      row.innerHTML = `<span class="slot-row-date">${s.toLocaleDateString('en-GB', { day:'numeric', month:'short' })} ${fmtTime(s)}</span><span class="slot-row-load">LOAD ›</span>`;
+      row.onclick = () => acctLoadCredentialsFromBooking(b);
+      listEl.appendChild(row);
+    });
+    allEl.style.display = '';
+  } else {
+    allEl.style.display = 'none';
+  }
+}
+
+function fmtTime(d) {
+  return d.toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit' });
+}
+
+function fmtDuration(ms) {
+  const h = Math.floor(ms / 3600000);
+  const m = Math.floor((ms % 3600000) / 60000);
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
+}
+
+async function acctLoadCredentials() {
+  if (!acctNextBooking) return;
+  // Fetch actual credentials for this booking
+  await acctLoadCredentialsFromBooking(acctNextBooking);
+}
+
+async function acctLoadCredentialsFromBooking(booking) {
+  const msgEl = document.getElementById('acct-load-msg');
+  const btn = document.getElementById('acct-load-btn');
+  if (btn) { btn.textContent = 'LOADING…'; btn.disabled = true; }
+  if (msgEl) msgEl.style.display = 'none';
+
+  try {
+    const res = await window.grooveline.apiCredentials({ token: acctToken, bookingId: booking.id });
+    const data = res.body;
+    if (res.status !== 200) {
+      showLoadMsg('error', data.error || 'Could not load credentials');
+      if (btn) { btn.textContent = '⬤ LOAD TO DESTINATIONS'; btn.disabled = false; }
+      return;
+    }
+
+    // Credentials endpoint returns: { server, port, mount_point, username, password, stream_key, rtmp_url, hls_url }
+    // Bookings list returns: { icecast_username, icecast_password, mount_point }
+    const creds = data.credentials || data;
+    const icecastHost    = creds.server          || creds.icecast_host  || booking.icecast_host || 'radio.grooveline.org';
+    const mountPoint     = creds.mount_point     || booking.mount_point || '/stream';
+    const sourcePassword = creds.password        || creds.icecast_password || booking.source_password || '';
+    const icecastUsername = creds.username       || creds.icecast_username || booking.icecast_username || 'source';
+    const streamKey      = creds.stream_key      || '';
+    // Build the Icecast profile
+    const profileName = `Grooveline — ${new Date(booking.start_time).toLocaleDateString('en-GB', { day:'numeric', month:'short' })}`;
+    const existing = cfg.profiles.findIndex(p => p._grooveline);
+    const profile = {
+      type: 'icecast',
+      name: profileName,
+      enabled: true,
+      _open: false,
+      _grooveline: true,
+      server: icecastHost,
+      mount: mountPoint,
+      username: icecastUsername,
+      password: sourcePassword,
+    };
+
+    if (existing >= 0) {
+      cfg.profiles[existing] = profile;
+    } else {
+      cfg.profiles.push(profile);
+    }
+
+    // Add MediaMTX (HLS video) profile only for video slots — not for audio-only (Icecast) bookings.
+    // stream_type is 'icecast' for audio sets, 'mediamtx'/'video' for video sets.
+    const isVideoSlot = streamKey && creds.stream_type && creds.stream_type !== 'icecast';
+    if (isVideoSlot) {
+      // Video slot — remove the Grooveline Icecast profile (RTMP replaces it)
+      cfg.profiles = cfg.profiles.filter(p => !p._grooveline);
+      const existingMTX = cfg.profiles.findIndex(p => p._grooveline_mtx);
+      const mtxProfile = {
+        type: 'mediamtx',
+        name: `${profileName} (Video)`,
+        enabled: true,
+        _open: false,
+        _grooveline_mtx: true,
+        rtmpBase: 'rtmp://46.224.177.15:1935/live/',
+        streamKey: streamKey,
+      };
+      if (existingMTX >= 0) {
+        cfg.profiles[existingMTX] = mtxProfile;
+      } else {
+        cfg.profiles.push(mtxProfile);
+      }
+    }
+
+    saveCfg();
+    renderDests();
+
+    // Switch to destinations tab so they can see it
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+    document.querySelector('[data-tab="destinations"]').classList.add('active');
+    document.getElementById('panel-destinations').classList.add('active');
+
+    showLoadMsg('success', '✓ Credentials loaded! Icecast enabled, MediaMTX available in Destinations.');
+    addLog(`Grooveline credentials loaded for ${profileName}`, 'success');
+  } catch(e) {
+    showLoadMsg('error', 'Network error: ' + e.message);
+  }
+  if (btn) { btn.textContent = '⬤ LOAD TO DESTINATIONS'; btn.disabled = false; }
+}
+
+function showLoadMsg(type, text) {
+  const el = document.getElementById('acct-load-msg');
+  if (!el) return;
+  el.textContent = text;
+  el.style.color = type === 'success' ? 'var(--teal)' : 'var(--coral)';
+  el.style.display = '';
+}
+
+function openGrooveline() {
+  window.grooveline.openExternal('https://grooveline.org');
+}
+</script>
+</body>
+</html>
