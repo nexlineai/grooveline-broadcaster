@@ -94,6 +94,18 @@ from `GET /check/status` (our Icecast), polled every 3 s, never from ffmpeg.
   `saveCfg()` dropped the token.
 - e2e: a Playwright `_electron` harness outside this repo (temp account, decoy destination).
 
+### Cameras (1.3.1, 21 Oct 2026)
+- The camera picker (`#video-row`) shows whenever **any RTMP destination** is enabled (`isVideoDest`: anything
+  but icecast/shoutcast). Before this, only MediaMTX counted, so YouTube, Twitch, Facebook and Mixcloud went out
+  audio-only and the picker stayed hidden.
+- **Hot-plug:** `watchDeviceChanges()` rescans on Chromium's `devicechange` (Windows, macOS and Linux), debounced
+  1.2 s. While live it only logs; the rescan restarts the preview, so it never runs mid-stream.
+- **Linux:** `listV4l2Devices()` reads `/sys/class/video4linux` (no v4l-utils needed) and keeps only `index` 0
+  nodes, because UVC cameras also register a metadata node. The option's `avIndex` is the `/dev/videoN` path.
+  `buildTeeArgs` falls back to the first camera when it gets anything else; before this it passed `-i 0`, which
+  ffmpeg can't open.
+- **MacBook FaceTime HD on Linux** needs the `facetimehd` DKMS driver: YUYV only, 30 fps, up to 1280x720.
+
 ### Device flow
 
 1. `list-audio-devices` IPC → ffmpeg `-list_devices` (AVFoundation/dshow) or `pactl` (Linux) → returns `{ devices[], videoDevices[] }`

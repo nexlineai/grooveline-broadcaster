@@ -131,7 +131,11 @@ function buildTeeArgs(profiles, quality, audioDevice, videoDevice, audioOnly, vo
         '-audio_buffer_size', '50',
         '-i', `video=${videoDeviceName || videoDevice || 'default'}:audio=${audioDeviceName || 'default'}`);
     } else {
-      args.push('-f', 'v4l2', '-framerate', String(quality.fps || 30), '-i', videoDevice || '/dev/video0');
+      // videoDevice is a /dev/videoN path from listV4l2Devices(); anything else (old configs saved
+      // '0') falls back to the first camera, so ffmpeg never gets a bare index it can't open.
+      const v4l = /^\/dev\/video\d+$/.test(String(videoDevice || '')) ? String(videoDevice)
+        : ((listV4l2Devices()[0] || {}).path || '/dev/video0');
+      args.push('-f', 'v4l2', '-framerate', String(quality.fps || 30), '-i', v4l);
       args.push('-f', 'pulse', '-ar', String(nativeSampleRate), '-ac', String(capChannels),
         '-i', audioDevice || 'default');
     }
@@ -1786,6 +1790,26 @@ function listDshowDevices() {
   });
 }
 
+// Linux cameras straight from sysfs (no v4l-utils needed). Every V4L2 camera, built-in
+// (e.g. the MacBook FaceTime HD via facetimehd) or USB/UVC, shows up here. A UVC camera
+// registers two nodes, capture (index 0) plus metadata (index 1), so only index 0 is kept.
+function listV4l2Devices() {
+  const base = '/sys/class/video4linux';
+  const out = [];
+  try {
+    const nodes = fs.readdirSync(base).filter(n => /^video\d+$/.test(n))
+      .sort((a, b) => parseInt(a.slice(5)) - parseInt(b.slice(5)));
+    for (const n of nodes) {
+      let name = n, idx = '0';
+      try { name = fs.readFileSync(`${base}/${n}/name`, 'utf8').trim() || n; } catch {}
+      try { idx = fs.readFileSync(`${base}/${n}/index`, 'utf8').trim(); } catch {}
+      if (idx !== '0') continue;
+      out.push({ index: `/dev/${n}`, path: `/dev/${n}`, name });
+    }
+  } catch {}
+  return out;
+}
+
 ipcMain.handle('list-audio-devices', async () => {
   const platform = process.platform;
 
@@ -1831,9 +1855,9 @@ ipcMain.handle('list-audio-devices', async () => {
           const parts = line.split('\t');
           return { index: i, name: parts[1] || parts[0] || `device${i}` };
         });
-      resolve({ devices });
+      resolve({ devices, videoDevices: listV4l2Devices() });
     });
-    proc.on('error', () => resolve({ devices: [{ index: 0, name: 'default' }] }));
+    proc.on('error', () => resolve({ devices: [{ index: 0, name: 'default' }], videoDevices: listV4l2Devices() }));
   });
 });
 
