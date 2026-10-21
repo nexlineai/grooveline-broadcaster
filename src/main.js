@@ -394,6 +394,7 @@ const STAGE_TEXT = {
   auth: 'the server refused the password (a new mount can take up to a minute to be ready)',
   mount_in_use: 'the server is still holding your previous connection — it lets go by itself, keep the app open',
   device: 'the audio input stopped or is unavailable',
+  camera: 'the camera stopped or is unavailable',
   encoder: 'the encoder failed',
   network: 'the network connection dropped',
   stalled: 'nothing has left your computer for 15 s',
@@ -409,11 +410,15 @@ function stageText(s, stage) {
   return STAGE_TEXT.mount_in_use + (isCheck ? ' (about a minute)' : ' (up to 10 minutes)');
 }
 
+// A device error that names the camera (Linux v4l2, Windows dshow). Until 1.4.0 these counted as the audio input,
+// so a missing camera ended with "the audio input failed 3 times".
+const CAMERA_LINE = /\/dev\/video\d|video4linux|v4l2|video device|Could not set video options/i;
+
 function classifyLine(line) {
   if (/\b401\b|Unauthorized/i.test(line)) return 'auth';
   if (/\b403\b|Forbidden/i.test(line)) return 'mount_in_use';
   if (/Error opening output|Connection refused|timed out|Network is unreachable|No route to host|resolve|not known|nodename|Connection reset|Broken pipe|End of file|Error writing trailer/i.test(line)) return 'network';
-  if (/Error opening input|sox FAIL|can't open input|Could not (find|open)|No such (file|device)|Device or resource busy|I\/O error|Unknown input format/i.test(line)) return 'device';
+  if (/Error opening input|sox FAIL|can't open input|Could not (find|open)|No such (file|device)|Device or resource busy|I\/O error|Unknown input format/i.test(line)) return CAMERA_LINE.test(line) ? 'camera' : 'device';
   if (/Unknown encoder|Error initializing output stream|Error while opening encoder/i.test(line)) return 'encoder';
   return null;
 }
@@ -461,7 +466,20 @@ function superviseLine(proc, line) {
     return;
   }
   const stage = classifyLine(line);
-  if (stage) { s.stage = stage; s.lastLine = line; }
+  // ffmpeg follows a camera error with generic "Error opening input" lines; keep the camera as the cause.
+  if (stage && !(s.stage === 'camera' && stage === 'device')) { s.stage = stage; s.lastLine = line; }
+}
+
+// Video slot without a working camera (none found, or it failed): stream to the booking's radio mount instead, so
+// the DJ is still on air (Zé, 21 Oct 2026). Changes the session's opts, so every relaunch stays on the radio.
+function fallBackToRadio(sender, opts, why) {
+  const fb = opts.fallbackProfile;
+  if (!fb) return false;
+  opts.profiles = [fb]; opts.audioOnly = true; opts.fallbackProfile = null;
+  safeSend(sender, 'stream-log', { type: 'warn', msg: `⚠ ${why}: streaming audio to the radio instead (${fb.mount || 'your mount'}). Your video is not on air.` });
+  safeSend(sender, 'stream-fallback', { why });
+  reportSetup('app_error', { stage: 'camera', detail: `${why}, fell back to the radio` });
+  return true;
 }
 
 // Called from every pipeline 'close' handler. Returns true if the supervisor
@@ -483,13 +501,14 @@ function scheduleRestart(why) {
   videoFfmpegProc = null; videoSoxProc = null;
 
   const stage = s.stage || (s.lastProgress ? 'network' : 'stalled');
-  s.sameStageFails = stage === s.prevStage ? s.sameStageFails + 1 : 1;
-  s.prevStage = stage;
+  const toRadio = stage === 'camera' && fallBackToRadio(s.sender, s.opts, 'The camera failed');
+  s.sameStageFails = toRadio ? 0 : stage === s.prevStage ? s.sameStageFails + 1 : 1;
+  s.prevStage = toRadio ? null : stage;
   // A brand-new mount (sound check, a booking made just now) reaches Icecast via
   // the sync agent's 1-minute cron, so 401 is expected at first: keep trying for
   // AUTH_GRACE_MS from GO LIVE before calling the password wrong.
   const inAuthGrace = stage === 'auth' && Date.now() - s.sessionStart < AUTH_GRACE_MS;
-  if (['auth', 'device', 'encoder'].includes(stage) && s.sameStageFails >= 3 && !inAuthGrace) return giveUp(stage);
+  if (['auth', 'device', 'camera', 'encoder'].includes(stage) && s.sameStageFails >= 3 && !inAuthGrace) return giveUp(stage);
 
   if (!s.everLive && !s.reportedError) {
     s.reportedError = true;
@@ -503,7 +522,8 @@ function scheduleRestart(why) {
   s.uiReconnecting = true;
   // While a new mount syncs, retry every 5 s: backing off to 30 s left a DJ
   // waiting up to half a minute after the mount was already there.
-  const delay = stage === 'mount_in_use' ? 15
+  const delay = toRadio ? 2
+    : stage === 'mount_in_use' ? 15
     : inAuthGrace ? 5
     : RETRY_DELAYS_S[Math.min(s.attempt - 1, RETRY_DELAYS_S.length - 1)];
   safeSend(s.sender, 'stream-reconnecting', { attempt: s.attempt, delay, stage, message: stageText(s, stage) || why });
@@ -521,6 +541,8 @@ function giveUp(stage) {
     ? 'Stopped: the server kept refusing the password for 2 minutes. Check the password and mount point — booking credentials also expire when your slot ends.'
     : stage === 'device'
     ? 'Stopped: the audio input failed 3 times. Check the device in Sources and press GO LIVE again.'
+    : stage === 'camera'
+    ? 'Stopped: the camera failed 3 times. Check it is plugged in and not open in another app, then press GO LIVE again.'
     : 'Stopped: the encoder failed 3 times. Copy the Stream Log and send it to us.';
   reportSetup('app_gave_up', { stage, detail: s.lastLine || why });
   safeSend(s.sender, 'stream-log', { type: 'error', msg: why });
@@ -587,7 +609,7 @@ function relaunch() {
   s.healthFails = 0; s.missingSince = 0; s.healthBusy = false; s.lastHealth = 0;
   let r;
   try { r = launchPipeline(s.event, s.opts); } catch (e) { r = { ok: false, error: e.message }; }
-  if (!r.ok) { s.lastLine = r.error || s.lastLine; scheduleRestart(r.error || 'launch failed'); return; }
+  if (!r.ok) { s.stage = r.stage || s.stage; s.lastLine = r.error || s.lastLine; scheduleRestart(r.error || 'launch failed'); return; }
   startWatchdog();
 }
 
@@ -918,6 +940,15 @@ ipcMain.handle('start-stream', async (event, opts) => {
   if (isStreaming) return { ok: false, error: 'Already streaming' };
   const activeProfiles = opts.profiles.filter(p => p.enabled);
   if (activeProfiles.length === 0) return { ok: false, error: 'No destinations enabled' };
+  // Grooveline only, one destination per show (1.4.0): the radio (Icecast) or the video server (MediaMTX).
+  // Two at once would take buildTeeArgs' multi-output branch, which never worked for video.
+  if (activeProfiles.length !== 1 || !['icecast', 'mediamtx'].includes(activeProfiles[0].type)) {
+    return { ok: false, error: 'This app streams to one Grooveline destination at a time: your radio slot or your video slot.' };
+  }
+  opts.profiles = activeProfiles;
+  opts.audioOnly = activeProfiles[0].type === 'icecast';
+  const fb = opts.fallbackProfile;
+  opts.fallbackProfile = !opts.audioOnly && fb && fb.type === 'icecast' ? { ...fb, enabled: true } : null;
   // A sound check must never reach a public mount: exactly one Icecast
   // destination, on a private /check-* mount, audio only — or nothing streams.
   if (opts.soundCheck) {
@@ -941,14 +972,17 @@ ipcMain.handle('start-stream', async (event, opts) => {
     supervise: !(process.platform === 'darwin' && hasRtmp && !opts.audioOnly),
     launchedAt: Date.now(), lastProgress: 0, stage: null, lastLine: '',
   };
-  if (process.platform === 'win32' && (!opts.audioDeviceName || opts.audioDeviceName === 'default')) {
+  const needAudioName = !opts.audioDeviceName || opts.audioDeviceName === 'default';
+  if (process.platform === 'win32' && (needAudioName || !opts.audioOnly)) {
+    const { devices, videoDevices } = await listDshowDevices();
+    // launchPipeline (sync, also run by every relaunch) picks the camera from this list.
+    opts._dshowCams = videoDevices;
     // DirectShow has no device called "default" — pick the first real input
     // rather than fail with "Error opening input file audio=default".
-    const { devices } = await listDshowDevices();
-    if (devices.length) {
+    if (needAudioName && devices.length) {
       opts.audioDeviceName = devices[0].name;
       safeSend(event.sender, 'stream-log', { type: 'warn', msg: `No input resolved — using "${devices[0].name}". Pick your input in SOURCES to change it.` });
-    } else {
+    } else if (needAudioName) {
       safeSend(event.sender, 'stream-log', { type: 'error', msg: 'No audio inputs found by ffmpeg (DirectShow). Plug in your controller / interface, then press GO LIVE again.' });
     }
   }
@@ -963,8 +997,29 @@ ipcMain.handle('start-stream', async (event, opts) => {
   return r;
 });
 
+// Windows/Linux video: use a camera that exists right now. "Default Camera", an old saved index or an unplugged
+// camera become the first one found; no camera at all → the radio fallback, or a clear error.
+// macOS checks in the renderer instead: Chromium owns the camera there (canvas capture).
+function pickCamera(event, opts) {
+  if (opts.audioOnly || process.platform === 'darwin') return null;
+  const cams = process.platform === 'win32' ? (opts._dshowCams || []) : listV4l2Devices();
+  if (!cams.length) {
+    if (fallBackToRadio(event.sender, opts, 'No camera found')) return null;
+    return 'No camera found. Plug one in and press GO LIVE again (this slot has no radio mount to fall back to; load your slot in Destinations).';
+  }
+  if (process.platform === 'win32') {
+    if (!cams.some(c => c.name === opts.videoDeviceName)) opts.videoDeviceName = cams[0].name;
+  } else if (!cams.some(c => c.path === opts.videoDevice)) {
+    opts.videoDevice = cams[0].path;
+  }
+  return null;
+}
+
 // Starts every process for one GO LIVE (also used by the supervisor to relaunch).
-function launchPipeline(event, { profiles, quality, audioDevice, audioDeviceName, audioChannels, videoDevice, videoDeviceName, audioOnly, volume }) {
+function launchPipeline(event, opts) {
+  const camErr = pickCamera(event, opts);
+  if (camErr) return { ok: false, error: camErr, stage: 'camera' };
+  const { profiles, quality, audioDevice, audioDeviceName, audioChannels, videoDevice, videoDeviceName, audioOnly, volume } = opts;
   const activeProfiles = profiles.filter(p => p.enabled);
   const ffmpeg = findFFmpeg();
 

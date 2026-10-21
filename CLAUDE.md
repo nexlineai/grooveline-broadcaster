@@ -94,10 +94,28 @@ from `GET /check/status` (our Icecast), polled every 3 s, never from ffmpeg.
   `saveCfg()` dropped the token.
 - e2e: a Playwright `_electron` harness outside this repo (temp account, decoy destination).
 
+### Grooveline-only destinations + radio fallback (1.4.0, 21 Oct 2026)
+- **Only two destination types:** `icecast` (Grooveline Radio) and `mediamtx` (Grooveline Video,
+  `rtmp://46.224.177.15:1935/live/<stream_key>`). YouTube, Twitch, Mixcloud, Facebook, SHOUTcast and Custom RTMP were
+  removed (Zé's decision); Grooveline restreams to its own channels server-side later. Old saved profiles of other
+  types are dropped on start.
+- **One destination per show.** `pickShow()` in the renderer: Grooveline Video wins when it's on; otherwise the
+  enabled radio (the booking's `_grooveline` one first). `start-stream` in `main.js` refuses anything but exactly one
+  `icecast`/`mediamtx` profile, so the broken multi-output branch of `buildTeeArgs` is never reached when live.
+- **Video slot → radio fallback.** Every booking has an Icecast mount, rtmp bookings too. Loading a video slot keeps
+  that radio profile (off) as `fallbackProfile`.
+  - Windows/Linux: `pickCamera()` in `launchPipeline` (so every relaunch too) resolves "Default Camera", stale
+    indexes and unplugged cameras to the first camera found. No camera → `fallBackToRadio()`.
+  - A camera error while live is its own stage, `camera` (`CAMERA_LINE`, sticky over the generic "Error opening
+    input" lines that follow). With a fallback it switches to the radio within 2 s; without one it gives up after 3
+    with a camera message, never "the audio input failed".
+  - macOS: the renderer falls back when `startCanvasCapture` fails.
+  - The UI shows `LIVE ● RADIO ONLY` (`stream-fallback` event).
+- **Known gap (site, not app):** a radio fallback on an rtmp booking makes `/api/live` return `stream_type: 'rtmp'`,
+  and the home page then shows the HLS video player instead of the audio player.
+
 ### Cameras (1.3.1, 21 Oct 2026)
-- The camera picker (`#video-row`) shows whenever **any RTMP destination** is enabled (`isVideoDest`: anything
-  but icecast/shoutcast). Before this, only MediaMTX counted, so YouTube, Twitch, Facebook and Mixcloud went out
-  audio-only and the picker stayed hidden.
+- The camera picker (`#video-row`) shows only when Grooveline Video is enabled (`isVideoDest`, since 1.4.0).
 - **Hot-plug:** `watchDeviceChanges()` rescans on Chromium's `devicechange` (Windows, macOS and Linux), debounced
   1.2 s. While live it only logs; the rescan restarts the preview, so it never runs mid-stream.
 - **Linux:** `listV4l2Devices()` reads `/sys/class/video4linux` (no v4l-utils needed) and keeps only `index` 0

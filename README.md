@@ -5,7 +5,8 @@ Stream your DJ set live to [Grooveline Radio](https://grooveline.org). Desktop a
 - **Sign in with your grooveline.org account.** Your booking's stream details load by themselves, so there's nothing to copy.
 - **Sound check.** A private test stream that never goes on air. Our server tells you when it hears you, and you can listen back.
 - **Reconnects by itself** after a Wi-Fi drop.
-- It can also stream to any Icecast or SHOUTcast server, or over RTMP (YouTube, Twitch and others).
+- **Grooveline only.** It streams to your slot on Grooveline Radio, or to Grooveline's video server for a video slot.
+  With no camera, a video slot streams to the radio instead, so you're still on air.
 
 ## Download
 

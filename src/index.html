@@ -1034,16 +1034,13 @@ audio#monitor-audio { display:none; }
 
 <script>
 // ── Platform templates ───────────────────────────────────────────
+// Grooveline only (1.4.0, Zé 21 Oct 2026): the radio (Icecast) and the video server (MediaMTX). YouTube, Twitch,
+// Facebook, Mixcloud, SHOUTcast and Custom RTMP are gone; Grooveline will restream to its own channels later.
 const PLATFORMS = [
-  { type:'youtube',   name:'YouTube Live',  icon:'▶', color:'#FF0000', rtmpBase:'rtmp://a.rtmp.youtube.com/live2/',          fields:['streamKey'] },
-  { type:'twitch',    name:'Twitch',        icon:'◈', color:'#9146FF', rtmpBase:'rtmp://live.twitch.tv/app/',                fields:['streamKey'] },
-  { type:'mixcloud',  name:'Mixcloud Live', icon:'♫', color:'#5000FF', rtmpBase:'rtmp://broadcast.mixcloud.com/broadcast/',  fields:['streamKey'] },
-  { type:'facebook',  name:'Facebook Live', icon:'f', color:'#1877F2', rtmpBase:'rtmps://live-api-s.facebook.com:443/rtmp/', fields:['streamKey'] },
-  { type:'icecast',   name:'Icecast',       icon:'❄', color:'#00d4c8', fields:['server','mount','password'] },
-  { type:'mediamtx',  name:'MediaMTX (HLS)',icon:'📹', color:'#00d4c8', rtmpBase:'rtmp://46.224.177.15:1935/live/',            fields:['streamKey'] },
-  { type:'shoutcast', name:'SHOUTcast',     icon:'📻',color:'#FF6B00', fields:['server','password'] },
-  { type:'custom',    name:'Custom RTMP',   icon:'⚙', color:'#888',    fields:['rtmpUrl'] },
+  { type:'icecast',   name:'Grooveline Radio', icon:'❄', color:'#00d4c8', server:'radio.grooveline.org', fields:['server','mount','password'] },
+  { type:'mediamtx',  name:'Grooveline Video', icon:'📹', color:'#00d4c8', rtmpBase:'rtmp://46.224.177.15:1935/live/', fields:['streamKey'] },
 ];
+const GL_TYPES = PLATFORMS.map(t => t.type);
 const QUALITY_PRESETS = {
   audio:  { videoBitrate:'0',    audioBitrate:'192k', videoSize:'640x360',   fps:30, audioOnly:true  },
   low:    { videoBitrate:'300k', audioBitrate:'192k', videoSize:'640x360',   fps:30, audioOnly:false },
@@ -1055,6 +1052,7 @@ const QUALITY_PRESETS = {
 let cfg = { profiles:[], audioDevice:'', videoDevice:'', audioOnly:true,
   quality:{ audioBitrate:'320k', videoBitrate:'0', videoSize:'1280x720', fps:30, nativeSampleRate:44100 }, volume:100 };
 let isLive = false, liveSeconds = 0, liveTimer = null;
+let liveOnRadioFallback = false; // a video show that is streaming to the radio (no camera)
 let appCheck = null; // running sound check: { mount, host, profile, poll, received, started }
 let previewStream = null, audioCtx = null, analyser = null, gainNode = null, animFrame = null, previewOn = false;
 let platform = '';
@@ -1068,6 +1066,9 @@ window.addEventListener('DOMContentLoaded', async () => {
   buildVU();
   cfg = await window.grooveline.loadConfig();
   if (!cfg.profiles) cfg.profiles = [];
+  // Saved destinations from before 1.4.0 (YouTube, Twitch, Custom RTMP…) are dropped once.
+  const dropped = cfg.profiles.filter(p => !GL_TYPES.includes(p.type));
+  if (dropped.length) { cfg.profiles = cfg.profiles.filter(p => GL_TYPES.includes(p.type)); window.grooveline.saveConfig(cfg); }
   platform = await window.grooveline.getPlatform();
   applyUI();
   await populateDevices();
@@ -1093,10 +1094,16 @@ window.addEventListener('DOMContentLoaded', async () => {
   });
   window.grooveline.onStreamReconnected(() => {
     const st = document.getElementById('stat-status');
-    st.textContent = appCheck ? 'TESTING (private) ●' : 'LIVE ●'; st.style.color = appCheck ? 'var(--gold)' : 'var(--coral)';
+    st.textContent = appCheck ? 'TESTING (private) ●' : liveOnRadioFallback ? 'LIVE ● RADIO ONLY' : 'LIVE ●'; st.style.color = appCheck ? 'var(--gold)' : 'var(--coral)';
+  });
+  window.grooveline.onStreamFallback(() => {
+    liveOnRadioFallback = true;
+    const st = document.getElementById('stat-status');
+    st.textContent = 'LIVE ● RADIO ONLY'; st.style.color = 'var(--coral)';
   });
   window.grooveline.onConfirmClose(() => document.getElementById('overlay').classList.add('show'));
   addLog('Ready. Choose sources, hit PREVIEW to check levels, then GO LIVE.', 'info');
+  if (dropped.length) addLog(`Removed ${dropped.length} old destination(s) (${dropped.map(p => p.name || p.type).join(', ')}): this app streams to Grooveline only.`, 'warn');
 });
 
 // ── Config ─────────────────────────────────────────────────────────
@@ -1133,9 +1140,18 @@ function saveCfg() {
   window.grooveline.saveConfig(cfg);
 }
 
-// Every RTMP destination carries video (YouTube, Twitch, Facebook, Mixcloud, MediaMTX, custom).
-// Until 1.3.1 only MediaMTX counted, so YouTube & co. were sent audio-only and the camera picker stayed hidden.
-function isVideoDest(p) { return p.type !== 'icecast' && p.type !== 'shoutcast'; }
+// Grooveline Video (MediaMTX) is the only video destination since 1.4.0.
+function isVideoDest(p) { return p.type === 'mediamtx'; }
+
+// One destination per show (1.4.0); main.js enforces the same rule. Grooveline Video wins when it is on, and the
+// radio mount (on or off) is its fallback for a missing or failing camera.
+function pickShow() {
+  const radios = cfg.profiles.filter(p => p.type === 'icecast');
+  const radioOn = radios.find(p => p.enabled && p._grooveline) || radios.find(p => p.enabled) || null;
+  const video = cfg.profiles.find(p => p.enabled && p.type === 'mediamtx');
+  if (video) return { profile: video, fallback: radios.find(p => p._grooveline) || radioOn || radios[0] || null };
+  return { profile: radioOn, fallback: null };
+}
 
 function updateAudioOnly() {
   // auto-detect: audio-only if no enabled video destination
@@ -1295,6 +1311,8 @@ async function populateDevices() {
 
     const aC = asel.options.length - 1; // exclude "Default Microphone"
     const vC = vsel.options.length - 1; // exclude "Default Camera"
+    // "Default Camera" means the first camera found (main.js resolves it on Windows/Linux).
+    vsel.options[0].textContent = vC ? 'First camera found' : 'No camera found: video slots stream to the radio';
     addLog(`Devices: ${aC} audio in, ${outputCount} audio out, ${vC} video`, 'success');
 
     await probeAndBuildChannelPicker(savedA || '');
@@ -1526,7 +1544,14 @@ async function startPreview() {
   };
 
   try {
-    previewStream = await navigator.mediaDevices.getUserMedia(constraints);
+    try {
+      previewStream = await navigator.mediaDevices.getUserMedia(constraints);
+    } catch(e) {
+      // No camera on a video slot: still show the audio levels (the show goes to the radio).
+      if (!constraints.video) throw e;
+      previewStream = await navigator.mediaDevices.getUserMedia({ ...constraints, video: false });
+      addLog('Preview: no camera, audio levels only.', 'warn');
+    }
   } catch(e) {
     const el = document.getElementById('preview-err');
     el.textContent = e.name === 'NotFoundError' ? 'Device not found.' : e.name === 'NotAllowedError' ? 'Permission denied.' : e.message;
@@ -1537,7 +1562,7 @@ async function startPreview() {
   }
 
   // Show camera live video in preview element
-  if (!audioOnly) {
+  if (!audioOnly && previewStream.getVideoTracks().length) {
     const previewVid = document.getElementById('preview-video');
     previewVid.srcObject = previewStream;
     previewVid.style.display = 'block';
@@ -1729,8 +1754,10 @@ function bind() {
 function renderDests() {
   const list = document.getElementById('dest-list');
   list.innerHTML = '';
+  const show = pickShow();
   cfg.profiles.forEach((p,i) => {
-    const tmpl = PLATFORMS.find(t=>t.type===p.type) || PLATFORMS[6];
+    const tmpl = PLATFORMS.find(t=>t.type===p.type) || PLATFORMS[0];
+    const note = show.fallback === p ? ' · used if no camera' : (p.enabled && show.profile !== p ? ' · not used (one destination per show)' : '');
     const card = document.createElement('div');
     card.className = 'dest-card'+(p.enabled?' enabled':'')+(p._open?' open':'');
     card.innerHTML = `
@@ -1739,7 +1766,7 @@ function renderDests() {
           <input type="checkbox" class="dest-cb" ${p.enabled?'checked':''}><div class="toggle-track"></div>
         </label>
         <span class="dest-icon">${tmpl.icon}</span>
-        <span class="dest-name" style="color:${p.enabled?tmpl.color:'var(--muted)'}">${p.name||tmpl.name}</span>
+        <span class="dest-name" style="color:${p.enabled?tmpl.color:'var(--muted)'}">${p.name||tmpl.name}<span style="color:var(--muted);font-size:9px">${note}</span></span>
         <span class="dest-chev">▼</span>
       </div>
       <div class="dest-fields">
@@ -1782,7 +1809,7 @@ function showAddMenu() {
     btn.innerHTML = `<span style="color:${tmpl.color};width:18px;text-align:center">${tmpl.icon}</span>${tmpl.name}`;
     btn.onclick = () => {
       cfg.profiles.push({ type:tmpl.type, name:tmpl.name, enabled:false, _open:true,
-        streamKey:'', server:'', mount:'', password:'', rtmpUrl:'', rtmpBase:tmpl.rtmpBase||'' });
+        streamKey:'', server:tmpl.server||'', mount:'', password:'', rtmpUrl:'', rtmpBase:tmpl.rtmpBase||'' });
       saveCfg(); renderDests(); menu.remove();
       document.querySelector('[data-tab="destinations"]').click();
     };
@@ -1823,13 +1850,13 @@ async function toggleLive(ev, checkProfile) {
     document.getElementById('vu-src').textContent = 'no source';
     addLog('Preview stopped.', 'info');
   }
-  const active = checkProfile ? [checkProfile] : cfg.profiles.filter(p=>p.enabled);
-  if (!active.length) {
-    addLog('No destinations enabled — add one in Destinations tab.', 'warn');
+  let show = checkProfile ? { profile: checkProfile, fallback: null } : pickShow();
+  if (!show.profile) {
+    addLog('No destination on. Sign in and load your slot in Destinations.', 'warn');
     document.querySelector('[data-tab="destinations"]').click(); return;
   }
-
-  const hasVideo = !checkProfile && !cfg.audioOnly && active.some(p => p.type !== 'icecast' && p.type !== 'shoutcast');
+  let hasVideo = isVideoDest(show.profile);
+  liveOnRadioFallback = false;
 
   // Start canvas capture BEFORE ffmpeg so frames are ready when pipe opens
   // Skip for ffmpeg-video: devices (DeckLink etc) — ffmpeg captures them directly via dshow/v4l2
@@ -1838,22 +1865,26 @@ async function toggleLive(ev, checkProfile) {
   if (hasVideo && platform === 'darwin' && !isFfmpegVideo) {
     const ok = await startCanvasCapture(videoId || undefined, cfg.quality);
     if (!ok) {
-      addLog('✗ Cannot start camera — check permissions', 'error');
-      return;
+      // No camera (or no permission): the radio keeps the DJ on air. Windows/Linux do this in main.js.
+      if (!show.fallback) { addLog('✗ Cannot start the camera (check it is connected and allowed), and this slot has no radio mount to fall back to.', 'error'); return; }
+      addLog(`⚠ Cannot start the camera: streaming audio to the radio instead (${show.fallback.mount || 'your mount'}). Your video is not on air.`, 'warn');
+      show = { profile: show.fallback, fallback: null }; hasVideo = false; liveOnRadioFallback = true;
     }
   }
 
-  addLog(checkProfile ? 'Starting sound check (private, not on air)…' : 'Starting stream to ' + active.length + ' destination(s)…', 'live');
+  addLog(checkProfile ? 'Starting sound check (private, not on air)…' : `Starting stream to ${show.profile.name || (hasVideo ? 'Grooveline Video' : 'Grooveline Radio')}…`, 'live');
 
   const r = await window.grooveline.startStream({
     soundCheck: !!checkProfile,
-    profiles: active, quality: cfg.quality,
+    profiles: [{ ...show.profile, enabled: true }],
+    fallbackProfile: show.fallback ? { ...show.fallback, enabled: true } : null,
+    quality: cfg.quality,
     audioDevice: cfg.audioDeviceIndex !== undefined ? String(cfg.audioDeviceIndex) : cfg.audioDevice,
     audioDeviceName: cfg.audioDeviceName || '',
     audioChannels: cfg.audioChannels || '0,1',
     videoDevice: cfg.videoDeviceIndex !== undefined ? cfg.videoDeviceIndex : '0',
     videoDeviceName: cfg.videoDeviceName || '',
-    audioOnly: checkProfile ? true : cfg.audioOnly, volume: cfg.volume || 100
+    audioOnly: !hasVideo, volume: cfg.volume || 100
   });
   if (r.ok) {
     setLive(true);
@@ -1988,9 +2019,9 @@ function setLive(on) {
       const s=String(liveSeconds%60).padStart(2,'0');
       document.getElementById('live-timer').textContent=`${h}:${m}:${s}`;
     }, 1000);
-    document.getElementById('stat-status').textContent = appCheck ? 'TESTING (private) ●' : 'LIVE ●';
+    document.getElementById('stat-status').textContent = appCheck ? 'TESTING (private) ●' : liveOnRadioFallback ? 'LIVE ● RADIO ONLY' : 'LIVE ●';
     document.getElementById('stat-status').style.color = appCheck ? 'var(--gold)' : 'var(--coral)';
-    document.getElementById('stat-streams').textContent = appCheck ? 1 : cfg.profiles.filter(p=>p.enabled).length;
+    document.getElementById('stat-streams').textContent = 1;
   } else {
     // The stream ended under a running sound check (STOP, or the app gave up).
     if (appCheck) { endAppCheck(false); setChkErr('chk-ready-err', 'The test stopped. STREAM LOG shows why.'); }
@@ -2839,13 +2870,16 @@ async function acctLoadCredentialsFromBooking(booking) {
     const sourcePassword = creds.password        || creds.icecast_password || booking.source_password || '';
     const icecastUsername = creds.username       || creds.icecast_username || booking.icecast_username || 'source';
     const streamKey      = creds.stream_key      || '';
-    // Build the Icecast profile
-    const profileName = `Grooveline — ${new Date(booking.start_time).toLocaleDateString('en-GB', { day:'numeric', month:'short' })}`;
-    const existing = cfg.profiles.findIndex(p => p._grooveline);
+    // stream_type is 'icecast' for audio slots and 'rtmp' for video slots (the site's booking form).
+    const isVideoSlot = !!(streamKey && creds.stream_type && creds.stream_type !== 'icecast');
+    const day = new Date(booking.start_time).toLocaleDateString('en-GB', { day:'numeric', month:'short' });
+    const profileName = `Grooveline Radio — ${day}`;
+    // Every booking has a radio mount, video slots too. On a video slot it stays off and is the fallback
+    // when there's no camera (1.4.0); before 1.4.0 it was deleted, so a missing camera meant no show at all.
     const profile = {
       type: 'icecast',
       name: profileName,
-      enabled: true,
+      enabled: !isVideoSlot,
       _open: false,
       _grooveline: true,
       server: icecastHost,
@@ -2853,34 +2887,20 @@ async function acctLoadCredentialsFromBooking(booking) {
       username: icecastUsername,
       password: sourcePassword,
     };
+    const existing = cfg.profiles.findIndex(p => p._grooveline);
+    if (existing >= 0) cfg.profiles[existing] = profile; else cfg.profiles.push(profile);
 
-    if (existing >= 0) {
-      cfg.profiles[existing] = profile;
-    } else {
-      cfg.profiles.push(profile);
-    }
-
-    // Add MediaMTX (HLS video) profile only for video slots — not for audio-only (Icecast) bookings.
-    // stream_type is 'icecast' for audio sets, 'mediamtx'/'video' for video sets.
-    const isVideoSlot = streamKey && creds.stream_type && creds.stream_type !== 'icecast';
+    cfg.profiles = cfg.profiles.filter(p => !p._grooveline_mtx);
     if (isVideoSlot) {
-      // Video slot — remove the Grooveline Icecast profile (RTMP replaces it)
-      cfg.profiles = cfg.profiles.filter(p => !p._grooveline);
-      const existingMTX = cfg.profiles.findIndex(p => p._grooveline_mtx);
-      const mtxProfile = {
+      cfg.profiles.push({
         type: 'mediamtx',
-        name: `${profileName} (Video)`,
+        name: `Grooveline Video — ${day}`,
         enabled: true,
         _open: false,
         _grooveline_mtx: true,
-        rtmpBase: 'rtmp://46.224.177.15:1935/live/',
+        rtmpBase: PLATFORMS.find(t => t.type === 'mediamtx').rtmpBase,
         streamKey: streamKey,
-      };
-      if (existingMTX >= 0) {
-        cfg.profiles[existingMTX] = mtxProfile;
-      } else {
-        cfg.profiles.push(mtxProfile);
-      }
+      });
     }
 
     saveCfg();
@@ -2892,8 +2912,10 @@ async function acctLoadCredentialsFromBooking(booking) {
     document.querySelector('[data-tab="destinations"]').classList.add('active');
     document.getElementById('panel-destinations').classList.add('active');
 
-    showLoadMsg('success', '✓ Credentials loaded! Icecast enabled, MediaMTX available in Destinations.');
-    addLog(`Grooveline credentials loaded for ${profileName}`, 'success');
+    showLoadMsg('success', isVideoSlot
+      ? '✓ Video slot loaded. With no camera the app streams audio to the radio instead.'
+      : '✓ Radio slot loaded.');
+    addLog(`Grooveline ${isVideoSlot ? 'video' : 'radio'} slot loaded for ${day}`, 'success');
   } catch(e) {
     showLoadMsg('error', 'Network error: ' + e.message);
   }
