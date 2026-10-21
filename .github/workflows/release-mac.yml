@@ -1,0 +1,75 @@
+# Signed + notarized macOS release (21 Oct 2026). Runs only for v* tags.
+#
+# The `sign` job uses the `mac-release` environment: it waits for the maintainer's approval, and that
+# environment is the ONLY place the signing secrets exist (never add repo-level secrets).
+# The `publish` job has no environment and no secrets; it only attaches the dmgs to a prerelease.
+# Never use pull_request_target here.
+name: release-mac
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-mac-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  sign:
+    runs-on: macos-15
+    environment: mac-release
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 22
+      - name: The tag must match package.json
+        run: test "v$(node -p 'require("./package.json").version')" = "$GITHUB_REF_NAME"
+      - name: Bundle sox + ffmpeg (pinned and checksummed)
+        run: scripts/mac-deps.sh
+      - run: npm ci --no-audit --no-fund
+      - name: Signing keychain (certificate + notary login)
+        run: scripts/mac-ci-keychain.sh
+        env:
+          MAC_CERT_P12_BASE64: ${{ secrets.MAC_CERT_P12_BASE64 }}
+          MAC_CERT_P12_PASSWORD: ${{ secrets.MAC_CERT_P12_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+      - name: Sign, build, verify, notarize, staple
+        run: scripts/mac-sign-notarize.sh dist/release
+      - name: Smoke test (signed Apple Silicon app)
+        run: scripts/mac-smoke.sh
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: broadcaster-mac-signed
+          path: dist/release/
+          if-no-files-found: error
+          retention-days: 30
+      - name: Remove the signing keychain
+        if: always()
+        run: '[ -n "${CSC_KEYCHAIN:-}" ] && security delete-keychain "$CSC_KEYCHAIN" || true'
+
+  publish:
+    needs: sign
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: broadcaster-mac-signed
+          path: out
+      - name: Attach to a prerelease (the download page is changed by hand, after testing)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG" out/*.dmg out/SHA256SUMS --repo "$GITHUB_REPOSITORY" --prerelease \
+            --title "$TAG (macOS, signed + notarized, not yet tested)" \
+            --notes "Signed and notarized macOS build. Not yet tested on a recent Apple Silicon Mac. The download page at grooveline.org/broadcast still serves the previous version until it is."

@@ -10,6 +10,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Never commit secrets.** Signing secrets live only in the `mac-release` environment (maintainer approval, `v*` tags).
   No repo-level secrets, ever. Never use `pull_request_target`.
 - `.github/workflows/build.yml`: unsigned Windows, Linux and macOS builds on every push, plus `scripts/mac-smoke.sh`.
+- `.github/workflows/release-mac.yml`: runs on a `v*` tag. Its `sign` job (environment `mac-release`) uses
+  `scripts/mac-ci-keychain.sh` to build a throwaway keychain, then `scripts/mac-sign-notarize.sh`, which the stick kit
+  shares. Its `publish` job attaches the dmgs to a **prerelease**; the download page is changed by hand after testing.
+- `--mac dmg` on the CLI builds **only the host arch** unless you pass `--arm64 --x64`. The first CI run made only the
+  arm64 dmg because of this.
 - `scripts/mac-deps.sh` fetches the pinned, checksummed `bin/mac` ffmpeg and sox (`bin/` is gitignored).
 
 ## Commands
