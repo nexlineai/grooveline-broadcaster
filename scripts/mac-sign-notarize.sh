@@ -13,6 +13,8 @@ mkdir -p "$OUT"; OUT="$(cd "$OUT" && pwd)"
 PROFILE="${NOTARY_PROFILE:-grooveline-notary}"
 KC="${CSC_KEYCHAIN:-}"
 fail() { echo; echo "STOPPED: $1"; [ -n "${GITHUB_ACTIONS:-}" ] && echo "::error title=mac release::$1"; exit 1; }
+# Logs and artifacts need a token, annotations don't: on CI, also emit the first lines of a tool's output.
+detail() { [ -n "${GITHUB_ACTIONS:-}" ] || return 0; printf '%s\n' "$1" | grep -v '^[[:space:]]*$' | head -n "${2:-8}" | while IFS= read -r l; do echo "::error title=mac release detail::${l:0:900}"; done || true; }
 step() { echo; echo "== $1"; }
 unset CSC_LINK CSC_KEY_PASSWORD
 # bash 3.2 (macOS) + set -u can't expand an empty array, so the keychain option is a plain word list.
@@ -42,14 +44,15 @@ done
 step "Building and signing both dmgs (Apple Silicon + Intel)"
 rm -rf dist/mac dist/mac-arm64 dist/*.dmg dist/*.blockmap
 CSC_IDENTITY_AUTO_DISCOVERY=true CSC_NAME="${IDENT#Developer ID Application: }" \
-  npx electron-builder --mac dmg --arm64 --x64 --publish never || fail "the build failed."
+  npx electron-builder --mac dmg --arm64 --x64 --publish never 2>&1 | tee "$OUT/build.log" \
+  || { detail "$(tail -n 8 "$OUT/build.log")"; fail "the build failed."; }
 
 step "Checking the signatures"
 shopt -s nullglob
 APPS=(dist/mac*/"Grooveline Broadcaster.app")
 [ ${#APPS[@]} -eq 2 ] || fail "expected 2 built apps (arm64 + x64), found ${#APPS[@]}."
 for app in "${APPS[@]}"; do
-  codesign --verify --deep --strict --verbose=2 "$app" || fail "signature check failed: $app"
+  v=$(codesign --verify --deep --strict --verbose=2 "$app" 2>&1) || { echo "$v"; detail "$v"; fail "signature check failed: $app"; }
   for f in "$app" "$app/Contents/Resources/sox" "$app/Contents/Resources/ffmpeg"; do
     info=$(codesign -dvv "$f" 2>&1 || true)
     [[ $info == *"Authority=Developer ID Application"* ]] || fail "not signed with Developer ID: $f"
@@ -74,19 +77,21 @@ for dmg in "${DMGS[@]}"; do
   echo "  Apple says: ${status:-no answer} (id ${id:-none})"
   if [ "$status" != "Accepted" ]; then
     [ -n "$id" ] && { NOTARY log "$id" "$OUT/notary-log-$name.json" || true; }
-    fail "Apple did not accept $name. Apple's reasons: $OUT/notary-log-$name.json"
+    why=$(node -e 'try{const j=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));for(const i of (j.issues||[]))console.log(`${i.severity}: ${i.path} [${i.architecture||"-"}]: ${i.message}`)}catch(e){console.log("no notary log")}' "$OUT/notary-log-$name.json")
+    echo "$why"; detail "$why" 10
+    fail "Apple did not accept $name ($status)."
   fi
   xcrun stapler staple "$dmg" || fail "stapling failed: $name"
   xcrun stapler validate "$dmg" || fail "staple check failed: $name"
   cp "$dmg" "$OUT/"   # notarized + stapled: saved before the Gatekeeper checks below
   out=$(spctl -a -t open --context context:primary-signature -vv "$dmg" 2>&1 || true); echo "$out"
-  [[ $out == *"Notarized Developer ID"* ]] || fail "Gatekeeper does not accept $name."
+  [[ $out == *"Notarized Developer ID"* ]] || { detail "$out"; fail "Gatekeeper does not accept $name."; }
   # Assess the app inside only for this Mac's own architecture.
   if [[ "$name" == *"-mac-$native.dmg" ]]; then
     mnt=$(hdiutil attach -nobrowse -readonly "$dmg" | awk -F'\t' '/\/Volumes\//{print $NF}' | tail -1)
     out=$(spctl -a -t exec -vv "$mnt/Grooveline Broadcaster.app" 2>&1 || true); echo "$out"
     hdiutil detach "$mnt" -quiet || true
-    [[ $out == *"Notarized Developer ID"* ]] || fail "Gatekeeper does not accept the app inside $name."
+    [[ $out == *"Notarized Developer ID"* ]] || { detail "$out"; fail "Gatekeeper does not accept the app inside $name."; }
   else
     echo "  (app inside $name not assessed on this $(uname -m) Mac; the dmg itself passed)"
   fi

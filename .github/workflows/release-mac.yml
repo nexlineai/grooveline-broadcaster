@@ -28,8 +28,10 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: 22
-      - name: The tag must match package.json
-        run: test "v$(node -p 'require("./package.json").version')" = "$GITHUB_REF_NAME"
+      - name: The tag must match package.json (v1.3.0, or a test tag like v1.3.0-rc.1)
+        run: |
+          V="v$(node -p 'require("./package.json").version')"
+          case "$GITHUB_REF_NAME" in "$V"|"$V"-*) ;; *) echo "::error::tag $GITHUB_REF_NAME does not match $V"; exit 1;; esac
       - name: Bundle sox + ffmpeg (pinned and checksummed)
         run: scripts/mac-deps.sh
       - run: npm ci --no-audit --no-fund
@@ -70,6 +72,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
         run: |
-          gh release create "$TAG" out/*.dmg out/SHA256SUMS --repo "$GITHUB_REPOSITORY" --prerelease \
-            --title "$TAG (macOS, signed + notarized, not yet tested)" \
-            --notes "Signed and notarized macOS build. Not yet tested on a recent Apple Silicon Mac. The download page at grooveline.org/broadcast still serves the previous version until it is."
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" out/*.dmg out/SHA256SUMS --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$TAG" out/*.dmg out/SHA256SUMS --repo "$GITHUB_REPOSITORY" --prerelease \
+              --title "$TAG (macOS, signed + notarized, not yet tested)" \
+              --notes "Signed and notarized macOS build. Not yet tested on a recent Apple Silicon Mac. The download page at grooveline.org/broadcast still serves the previous version until it is."
+          fi

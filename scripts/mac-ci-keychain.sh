@@ -22,14 +22,16 @@ security import "$RUNNER_TEMP/DeveloperIDG2CA.cer" -k "$KC"
 
 P12="$RUNNER_TEMP/cert.p12"
 printf '%s' "$MAC_CERT_P12_BASE64" | base64 --decode > "$P12"
-security import "$P12" -k "$KC" -P "$MAC_CERT_P12_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
+out=$(security import "$P12" -k "$KC" -P "$MAC_CERT_P12_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security 2>&1) \
+  || { rm -f "$P12"; echo "::error title=mac release::importing the .p12 failed: ${out:0:400}"; exit 1; }
 rm -f "$P12"
 security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KCPW" "$KC" >/dev/null
 # shellcheck disable=SC2046
 security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d '"')
 
-xcrun notarytool store-credentials grooveline-notary --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" \
-  --password "$APPLE_APP_SPECIFIC_PASSWORD" --keychain "$KC" >/dev/null
+out=$(xcrun notarytool store-credentials grooveline-notary --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" \
+  --password "$APPLE_APP_SPECIFIC_PASSWORD" --keychain "$KC" 2>&1) \
+  || { echo "::error title=mac release::Apple refused the notary login (Apple ID, Team ID or app-specific password): ${out:0:400}"; exit 1; }
 echo "CSC_KEYCHAIN=$KC" >> "$GITHUB_ENV"
 ids=$(security find-identity -v -p codesigning "$KC" || true)
 [[ $ids == *"Developer ID Application"* ]] || { echo "::error title=mac release::the .p12 has no Developer ID Application identity"; exit 1; }
