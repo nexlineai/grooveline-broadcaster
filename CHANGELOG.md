@@ -2,6 +2,17 @@
 
 The app shows the sections newer than the version you had before under "What's new" the first time it opens.
 
+## 1.6.0
+
+- Your slot is your destination. Sign in and the app loads it; there is nothing to enter by hand any more, and destinations entered by hand before are removed.
+- GO LIVE opens 15 minutes before your slot starts and closes when it ends, by Grooveline's clock. The Stream check works any time.
+- Every GO LIVE loads your slot's details again, so an old stream key can never go out.
+- Video slots: with no camera, your audio goes to the radio by itself. There is nothing to switch on.
+- Video shows are recorded on your computer and saved as MP4 when you press STOP (RECORDING › Record my video shows).
+- Linux and Windows: MP4 recordings on a video slot now include the camera when you are not live.
+- USB webcams stream at full quality: the app uses the camera's MJPEG mode at your stream size when it has one.
+- When Grooveline's video server refuses a stream, the app says so and stops after 3 tries instead of retrying forever. "Connected" now shows only once the server has accepted the stream.
+
 ## 1.5.1
 
 - Quitting the app now stops the camera cleanly first. On some Linux laptops a camera cut off mid-stream could stop working until a restart.

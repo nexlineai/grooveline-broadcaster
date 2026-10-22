@@ -227,18 +227,6 @@ select:disabled { opacity: .6; cursor: not-allowed; }
 details.adv > summary { cursor: pointer; font: 12px/1 var(--f-mono); letter-spacing: .14em; color: var(--muted); text-transform: uppercase; list-style: none; display: flex; justify-content: space-between; }
 details.adv > summary::after { content: '›'; color: var(--teal); }
 details.adv[open] > summary::after { content: '⌄'; }
-.dest-list { display: grid; gap: 8px; }
-.dest-card { background: var(--bg1); border: 1px solid var(--line); border-radius: 4px; }
-.dest-card.enabled { border-color: rgba(0,212,200,.35); }
-.dest-card-hdr { display: flex; align-items: center; gap: 10px; padding: 10px 12px; cursor: pointer; }
-.dest-name { flex: 1; font: 13px/1.3 var(--f-mono); }
-.dest-note { color: var(--muted); font-size: 12px; }
-.dest-fields { display: none; padding: 10px 12px; border-top: 1px solid var(--line); gap: 8px; }
-.dest-card.open .dest-fields { display: grid; }
-#dest-add-menu { background: var(--bg2); border: 1px solid var(--line); border-radius: 4px; overflow: hidden; }
-.add-menu-item { padding: 10px 14px; cursor: pointer; font: 13px/1 var(--f-mono); border-bottom: 1px solid var(--line); }
-.add-menu-item:last-child { border-bottom: 0; }
-.add-menu-item:hover { background: var(--teal-a); }
 
 /* ── Modals ── */
 .a-modal { position: fixed; inset: 0; background: rgba(5,5,8,.82); display: none; place-items: center; z-index: 50; }
@@ -362,7 +350,8 @@ details.adv[open] > summary::after { content: '⌄'; }
       <section class="a-page" data-page="recording">
         <div class="card">
           <div class="c-hd"><span class="c-t">Recording</span><span class="c-r">● REC is on the right</span></div>
-          <div class="hint">While you're live, REC records exactly what Grooveline receives. When you're not live, it records your input.</div>
+          <div class="hint">While you're live on the radio, REC records exactly what Grooveline receives. When you're not live, REC records your input, and MP4 on a video slot adds the camera.</div>
+          <div class="toggle-row"><span>Record my video shows on this computer<br><span class="small">The whole show as Grooveline receives it, saved as MP4 in the folder below when you press STOP.</span></span><label class="toggle"><input type="checkbox" id="set-recshow" checked><span class="toggle-track"></span></label></div>
           <div class="field"><span class="lbl">Format</span>
             <div class="fmt-grid">
               <div class="fmt-btn active" id="fmt-aac" onclick="setRecFmt('aac')">AAC</div>
@@ -493,15 +482,6 @@ details.adv[open] > summary::after { content: '⌄'; }
           <div class="toggle-row"><span>Open the log in the Technical view</span><label class="toggle"><input type="checkbox" id="set-techlog"><span class="toggle-track"></span></label></div>
           <div class="row"><div class="small" style="flex:1" id="set-logdir"></div><button class="btn sm" onclick="window.grooveline.logOpenFolder()">Open log folder</button></div>
         </div>
-        <div class="card">
-          <details class="adv" id="adv"><summary>Advanced: enter stream details by hand <span id="dest-count"></span></summary>
-            <div style="display:grid;gap:10px;margin-top:12px">
-              <div class="hint">For Grooveline staff and tests. Normally your booking sets the destination after you sign in.</div>
-              <div class="dest-list" id="dest-list"></div>
-              <button class="btn teal" id="add-dest-btn">＋ Add destination</button>
-            </div>
-          </details>
-        </div>
       </section>
     </main>
 
@@ -579,6 +559,11 @@ window.addEventListener('DOMContentLoaded', async () => {
   // Saved destinations from before 1.4.0 (YouTube, Twitch, Custom RTMP…) are dropped once.
   const dropped = cfg.profiles.filter(p => !GL_TYPES.includes(p.type));
   if (dropped.length) cfg.profiles = cfg.profiles.filter(p => GL_TYPES.includes(p.type));
+  // 1.6.0: no hand-entered destinations. The slot you load by signing in is the only one, so a typed key or an old
+  // entry can never stream (22 Oct: an empty key and a radio password typed as a stream key were refused).
+  const handMade = cfg.profiles.filter(p => !p._grooveline && !p._grooveline_mtx).length;
+  cfg.profiles = cfg._acctToken ? cfg.profiles.filter(p => p._grooveline || p._grooveline_mtx) : [];
+  if (!cfg._acctToken) delete cfg._bookingId;
   // 1.5.0: stream volume tops out at 100 % (the input unchanged). Older saves went up to 150 %.
   if (typeof cfg.volume !== 'number' || cfg.volume > 100) cfg.volume = Math.min(100, Number(cfg.volume ?? 100) || 100);
   if (!cfg.quality) cfg.quality = {};
@@ -596,7 +581,11 @@ window.addEventListener('DOMContentLoaded', async () => {
   setLogView(!!cfg.logTechnical);
   $('set-techlog').checked = !!cfg.logTechnical;
   $('set-updates').checked = cfg.updateCheck !== false;
-  buildScale(); applyUI(); bind(); renderDests(); setVol(cfg.volume);
+  $('set-recshow').checked = cfg.recordVideoShows !== false;
+  if (handMade) addLog(`Removed ${handMade} destination${handMade > 1 ? 's' : ''} entered by hand: the app now streams only to the slot it loads when you sign in.`, 'info');
+  buildScale(); applyUI(); bind(); setVol(cfg.volume);
+  // GO LIVE opens and closes by the slot's time: re-check it while idle.
+  setInterval(() => { if (!isLive) refreshUI(); }, 10000);
   window.grooveline.saveConfig(cfg);
   if (dropped.length) addLog(`Removed ${dropped.length} old destination(s) (${dropped.map(p => p.name || p.type).join(', ')}): this app streams to Grooveline only.`, 'warn');
   if (appInfo && !appInfo.ffmpeg) {
@@ -638,7 +627,14 @@ function bindStreamEvents() {
     reconnect = { attempt, delay, stage, message, at: Date.now() }; onAir = false; lastBitrate = null; refreshUI();
   });
   window.grooveline.onStreamReconnected(() => { reconnect = null; onAir = true; refreshUI(); });
-  window.grooveline.onStreamFallback(() => { liveOnRadioFallback = true; refreshUI(); });
+  window.grooveline.onStreamFallback(() => {
+    liveOnRadioFallback = true;
+    if (recModeNow === 'show') {
+      isRecording = false; recModeNow = null; clearInterval(recTimerInterval); setRecordingUI(false);
+      addLog('The video recording stops here: the show is on the radio only. What was recorded is saved when you press STOP. Press REC to record the radio audio.', 'warn');
+    }
+    refreshUI();
+  });
   window.grooveline.onConfirmClose(() => $('overlay').classList.add('show'));
   // Quitting: stop the camera here, so it closes cleanly (main.js waits for it before the window goes).
   window.grooveline.onReleaseDevices(() => { closing = true; try { teardown(); stopCanvasCapture(); } catch(e) {} window.grooveline.devicesReleased(); });
@@ -732,9 +728,14 @@ function findFfDevice(label, list) {
 async function populateDevices() {
   try {
     teardown();
-    const tmp = await navigator.mediaDevices.getUserMedia({ audio:true, video:true })
-      .catch(() => navigator.mediaDevices.getUserMedia({ audio:true }).catch(()=>null));
-    if (tmp) tmp.getTracks().forEach(t => t.stop());
+    // Device names need one permission grant; after that they are listed without opening anything. Skip the probe
+    // then (1.6.0): every open and close is a start and stop on the camera.
+    const pre = await navigator.mediaDevices.enumerateDevices().catch(() => []);
+    if (!pre.length || pre.some(d => (d.kind === 'audioinput' || d.kind === 'videoinput') && !d.label)) {
+      const tmp = await navigator.mediaDevices.getUserMedia({ audio:true, video:true })
+        .catch(() => navigator.mediaDevices.getUserMedia({ audio:true }).catch(()=>null));
+      if (tmp) tmp.getTracks().forEach(t => t.stop());
+    }
 
     const devs = await navigator.mediaDevices.enumerateDevices();
     const asel = $('audio-device'), vsel = $('video-device');
@@ -954,7 +955,22 @@ async function startCanvasCapture(videoDeviceId, quality) {
 
 // The preview runs whenever the app isn't live: it drives the meters (same channel pair and volume as the stream)
 // and, on a video slot, the camera preview. GO LIVE stops it first, so the device is never opened twice.
+// A camera the app lists but Chromium can't open (e.g. some Linux drivers) still streams: ffmpeg opens it at GO LIVE.
+const noPreviewText = () => $('video-device').options.length > 1 ? 'No preview for this camera. It still streams when you go live.' : 'No camera found';
+// Linux: the level comes from ffmpeg and the camera from Chromium. An input change swaps only the meter, so the camera
+// isn't closed and reopened (1.6.0).
+async function refreshPreviewAudio() {
+  if (isLive) return;
+  if (platform === 'linux' && previewTapOn && previewStream && previewStream.getVideoTracks().some(t => t.readyState === 'live')) {
+    window.grooveline.meterPreviewStop();
+    const r = await window.grooveline.meterPreviewStart({ deviceName: cfg.audioDeviceName || 'default', audioChannels: cfg.audioChannels, sampleRate: cfg.quality.nativeSampleRate });
+    previewTapOn = !!(r && r.ok);
+    return;
+  }
+  await startPreview();
+}
 async function startPreview() {
+  if (recModeNow === 'cam') return false;
   teardown();
   if (isLive || closing) return false;
   const audioId = $('audio-device').value, videoId = $('video-device').value;
@@ -981,14 +997,14 @@ async function startPreview() {
       addLog('Preview: no camera, audio levels only.', 'warn', { tech: true });
     }
   } catch(e) {
-    if (previewTapOn) { $('preview-ph').textContent = 'No camera found'; addLog('Preview: no camera.', 'warn', { tech: true }); return true; }
+    if (previewTapOn) { $('preview-ph').textContent = noPreviewText(); addLog('Preview: no camera.', 'warn', { tech: true }); return true; }
     addLog('Preview failed: ' + (e.name === 'NotFoundError' ? 'input not found' : e.name === 'NotAllowedError' ? 'permission denied' : e.message), 'warn');
     return false;
   }
   if (isLive || closing) { teardown(); return false; } // GO LIVE or quit was pressed meanwhile
   if (!cfg.audioOnly && previewStream.getVideoTracks().length) {
     const v = $('preview-video'); v.srcObject = previewStream; v.style.display = 'block'; $('preview-ph').style.display = 'none';
-  } else if (!cfg.audioOnly) $('preview-ph').textContent = 'No camera found';
+  } else if (!cfg.audioOnly) $('preview-ph').textContent = noPreviewText();
 
   const at = previewStream.getAudioTracks()[0];
   // An input only ffmpeg lists (a macOS aggregate device, an unmatched dshow name): Chromium opened its default device
@@ -1109,6 +1125,18 @@ function flashHint() { const h = $('m-hint'); h.style.color = 'var(--gold)'; set
 const STAGE_FIX = { device: 'fix-device', launch: 'fix-device', camera: 'fix-camera', auth: 'fix-auth', mount_in_use: 'fix-held', network: 'fix-network', stalled: 'fix-network', encoder: 'fix-encoder' };
 const fmtClock = s => [Math.floor(s / 3600), Math.floor(s % 3600 / 60), s % 60].map(n => String(n).padStart(2, '0')).join(':');
 function loadedBooking() { return acctBookings.find(b => b.id === cfg._bookingId) || acctNextBooking || null; }
+// GO LIVE opens 15 minutes before the slot starts and closes when it ends (1.6.0). The video server takes a stream
+// from start − 15 min, and the radio password expires at the end. Times are Grooveline's clock: every API answer
+// carries it (Date header), so a laptop a few minutes off is neither blocked nor let through early.
+const GO_EARLY_MS = 15 * 60 * 1000;
+let clockOffset = 0;
+const serverNow = () => Date.now() + clockOffset;
+function noteServerDate(res) { const t = res && res.date ? Date.parse(res.date) : NaN; if (!isNaN(t)) clockOffset = t - Date.now(); }
+function slotWindow(b) {
+  if (!b || !b.start_time || !b.end_time) return { state: 'none' };
+  const start = new Date(b.start_time).getTime(), end = new Date(b.end_time).getTime(), opensAt = start - GO_EARLY_MS, now = serverNow();
+  return { state: now < opensAt ? 'early' : now <= end ? 'open' : 'ended', opensAt, start, end };
+}
 function minutesLeft(b) { if (!b || !b.end_time) return null; const ms = new Date(b.end_time) - Date.now(); return isNaN(ms) ? null : ms; }
 
 function refreshUI() {
@@ -1116,6 +1144,7 @@ function refreshUI() {
   const prof = show.profile;
   const signedIn = !!acctToken;
   const fb = show.fallback;
+  const win = slotWindow(prof ? loadedBooking() : null);
   let word, cls, sub, pill;
   if (isLive && appCheck) { word = 'STREAM CHECK'; cls = 'warn'; sub = 'Private test mount · nobody hears it'; }
   else if (isLive && reconnect) {
@@ -1130,7 +1159,9 @@ function refreshUI() {
     sub = `${prof ? (isVideoDest(prof) ? 'Grooveline Video' : 'Grooveline Radio · ' + (prof.mount || '')) : ''}${lastBitrate ? ' · ' + lastBitrate + ' kbps' : ''}${toStart > 0 ? ' · slot starts in ' + fmtLeft(toStart) : left > 0 ? ' · ' + fmtLeft(left) + ' left' : ''}`;
   }
   else if (lastError) { word = 'STOPPED'; cls = 'bad'; sub = lastError.title || 'See the message on ON AIR'; }
-  else if (prof) { word = 'READY'; cls = 'ready'; sub = isVideoDest(prof) ? `Grooveline Video${fb ? ' · radio ' + (fb.mount || '') + ' if no camera' : ''}` : `Grooveline Radio · ${prof.mount || ''}`; }
+  else if (prof && win.state === 'early') { word = 'NOT YET'; cls = 'idle'; sub = `GO LIVE opens at ${fmtTime(new Date(win.opensAt))}, 15 min before your slot`; }
+  else if (prof && win.state === 'ended') { word = 'SLOT ENDED'; cls = 'idle'; sub = 'Book your next slot on grooveline.org'; }
+  else if (prof) { word = 'READY'; cls = 'ready'; sub = isVideoDest(prof) ? `Grooveline Video${fb ? ' · radio if no camera' : ''}` : `Grooveline Radio · ${prof.mount || ''}`; }
   else { word = 'NOT READY'; cls = 'idle'; sub = signedIn ? 'No slot loaded' : 'Sign in to load your slot'; }
   const st = $('stat-status'); st.textContent = word; st.className = 'st-word ' + cls;
   $('st-sub').textContent = sub;
@@ -1140,8 +1171,10 @@ function refreshUI() {
   const go = $('btn-go-live');
   go.textContent = isLive && !appCheck ? 'STOP' : 'GO LIVE';
   go.classList.toggle('live', isLive && !appCheck);
-  go.disabled = !!appCheck || (!isLive && !prof);
-  go.title = !isLive && !prof ? (signedIn ? 'No slot loaded: book one on grooveline.org' : 'Sign in to load your slot first') : '';
+  const canGo = signedIn && !!prof && win.state === 'open';
+  go.disabled = !!appCheck || (!isLive && !canGo);
+  go.title = isLive || canGo ? '' : !signedIn ? 'Sign in to load your slot first' : !prof ? 'No slot loaded: book one on grooveline.org'
+    : win.state === 'early' ? `Opens at ${fmtTime(new Date(win.opensAt))}, 15 minutes before your slot` : 'Your slot has ended';
   $('btn-check').disabled = isLive && !appCheck;
   $('btn-check').textContent = appCheck ? 'Stop check' : 'Stream check';
   $('fader').classList.toggle('locked', isLive);
@@ -1163,7 +1196,7 @@ function fmtLeft(ms) { const m = Math.round(ms / 60000); return m >= 60 ? `${Mat
 
 function renderSteps(signedIn, prof) {
   const signal = Date.now() - lastSignalAt < 4000;
-  const done = [signedIn || !!prof, !!prof, signal, !!checkPassedAt || (isLive && !appCheck), isLive && !appCheck];
+  const done = [signedIn, !!prof, signal, !!checkPassedAt || (isLive && !appCheck), isLive && !appCheck];
   const names = ['Sign in', 'Your slot', 'Input has signal', 'Stream check', 'GO LIVE'];
   const now = done.findIndex(d => !d);
   $('steps').innerHTML = names.map((n, i) => `<span class="step ${done[i] ? 'done' : i === now ? 'now' : ''}">${done[i] ? '✓' : i === now ? '›' : '○'} ${n}</span>`).join('');
@@ -1185,25 +1218,19 @@ function esc(s) { return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&
 
 function renderSlot() {
   const show = pickShow(), prof = show.profile, signedIn = !!acctToken;
-  const manual = prof && !prof._grooveline && !prof._grooveline_mtx;
-  $('c-signin').hidden = signedIn || !!manual;
-  $('c-slot').hidden = !signedIn && !prof;
+  $('c-signin').hidden = signedIn;
+  $('c-slot').hidden = !signedIn;
   if ($('c-slot').hidden) return;
   const b = loadedBooking();
   let html = '';
-  if (!signedIn && !manual) {
-    html = `<div class="slot-main"><span class="slot-dest">${isVideoDest(prof) ? 'GROOVELINE VIDEO' : 'GROOVELINE RADIO'}</span><span class="tag muted">signed out</span></div>
-      <div class="slot-meta"><span>${isVideoDest(prof) ? 'Your last video slot' : 'Mount <b>' + esc(prof.mount || '') + '</b>'} is still loaded. Sign in above to refresh it.</span></div>`;
-  } else if (manual) {
-    html = `<div class="slot-main"><span class="slot-dest">${isVideoDest(prof) ? 'GROOVELINE VIDEO' : 'GROOVELINE RADIO'}</span><span class="tag muted">entered by hand</span></div>
-      <div class="slot-meta"><span>${isVideoDest(prof) ? 'Stream key set' : 'Mount <b>' + esc(prof.mount || '') + '</b>'}</span><span>Settings › Advanced</span></div>`;
-  } else if (!b) {
+  if (!b) {
     html = acctBookingsError ? `<div class="err">Couldn't load your slots: ${esc(acctBookingsError)}</div>`
       : `<div class="hint" style="color:var(--text);font-size:15px">No upcoming slot.</div><div class="hint"><a onclick="openExt('https://grooveline.org/broadcast')">Book a slot on grooveline.org ›</a> Then press ↻.</div>`;
   } else {
     const start = new Date(b.start_time), end = new Date(b.end_time), now = Date.now();
     const today = start.toDateString() === new Date().toDateString();
     const when = `${today ? 'Today' : start.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })} ${fmtTime(start)}–${fmtTime(end)}`;
+    const win = slotWindow(b);
     let tag;
     if (isLive && !appCheck) tag = `<span class="tag coral">${liveOnRadioFallback ? 'ON AIR · RADIO ONLY' : reconnect ? 'RECONNECTING' : 'ON AIR'}</span>`;
     else if (now < start) tag = `<span class="tag gold">starts in ${fmtLeft(start - now)}</span>`;
@@ -1211,15 +1238,15 @@ function renderSlot() {
     else tag = `<span class="tag muted">ended</span>`;
     const video = prof && isVideoDest(prof);
     const meta = video
-      ? `<span>Camera → <b>Grooveline Video</b></span>${show.fallback ? `<span>No camera → <b>radio ${esc(show.fallback.mount || '')}</b></span>` : ''}`
+      ? `<span>Camera → <b>Grooveline Video</b></span>${show.fallback ? `<span>No camera → your audio goes to the radio by itself</span>` : ''}`
       : prof ? `<span>Mount <b>${esc(prof.mount || '')}</b></span><span>Ogg Vorbis · about 192 kbps</span>` : `<span>Loading your stream details…</span>`;
-    html = `<div class="slot-main"><span class="slot-dest">${video ? 'GROOVELINE VIDEO' : 'GROOVELINE RADIO'}</span><span class="slot-when">${when}</span>${tag}</div><div class="slot-meta">${meta}</div>`;
+    const opens = !isLive && win.state === 'early' ? `<span>GO LIVE opens at <b>${fmtTime(new Date(win.opensAt))}</b></span>` : '';
+    html = `<div class="slot-main"><span class="slot-dest">${video ? 'GROOVELINE VIDEO' : 'GROOVELINE RADIO'}</span><span class="slot-when">${when}</span>${tag}</div><div class="slot-meta">${meta}${opens}</div>`;
   }
   if ($('slot-body').dataset.html !== html) { $('slot-body').innerHTML = html; $('slot-body').dataset.html = html; }
   const pick = $('slot-pick');
-  pick.hidden = manual || acctBookings.length < 2;
+  pick.hidden = acctBookings.length < 2;
   pick.disabled = isLive;
-  $('acct-refresh-btn').hidden = !!manual;
 }
 
 function renderCheck() {
@@ -1255,14 +1282,14 @@ function bind() {
   $('ov-quit').onclick   = () => window.grooveline.forceQuit();
   document.querySelectorAll('.a-tab').forEach(btn => btn.onclick = () => showPage(btn.dataset.p));
   $('audio-device').onchange = onAudioDeviceChange;
-  $('audio-channels').onchange = async () => { cfg.audioChannels = $('audio-channels').value; saveCfg(); if (!isLive) await startPreview(); refreshUI(); };
+  $('audio-channels').onchange = async () => { cfg.audioChannels = $('audio-channels').value; saveCfg(); await refreshPreviewAudio(); refreshUI(); };
   $('video-device').onchange = onSourceChange;
   $('refresh-btn').onclick = async () => { if (!isLive) await populateDevices(); };
   ['q-vbr','q-res','q-fps','q-samplerate'].forEach(id => { $(id).onchange = saveCfg; });
   $('btn-go-live').onclick = toggleLive;
-  $('add-dest-btn').onclick = showAddMenu;
   $('slot-pick').onchange = () => { const b = acctBookings.find(x => x.id === $('slot-pick').value); if (b) acctLoadCredentialsFromBooking(b); };
   $('set-updates').onchange = e => { cfg.updateCheck = e.target.checked; saveCfg(); };
+  $('set-recshow').onchange = e => { cfg.recordVideoShows = e.target.checked; saveCfg(); };
   $('set-techlog').onchange = e => { cfg.logTechnical = e.target.checked; saveCfg(); setLogView(e.target.checked); };
   setTipsOs(platform || 'linux');
   bindFader();
@@ -1282,69 +1309,10 @@ function bind() {
 async function onAudioDeviceChange() {
   await probeAndBuildChannelPicker();
   saveCfg();
-  if (!isLive) await startPreview();
+  await refreshPreviewAudio();
   refreshUI();
 }
 async function onSourceChange() { saveCfg(); if (!isLive) await startPreview(); }
-
-// ── Destinations (Settings › Advanced) ─────────────────────────────
-function renderDests() {
-  const list = $('dest-list');
-  list.innerHTML = '';
-  const show = pickShow();
-  cfg.profiles.forEach((p, i) => {
-    const tmpl = PLATFORMS.find(t => t.type === p.type) || PLATFORMS[0];
-    const note = show.fallback === p ? ' · used if no camera' : (p.enabled && show.profile !== p ? ' · not used (one destination per show)' : '');
-    const card = document.createElement('div');
-    card.className = 'dest-card' + (p.enabled ? ' enabled' : '') + (p._open ? ' open' : '');
-    card.innerHTML = `
-      <div class="dest-card-hdr">
-        <label class="toggle" onclick="event.stopPropagation()"><input type="checkbox" class="dest-cb" ${p.enabled ? 'checked' : ''}><span class="toggle-track"></span></label>
-        <span class="dest-name" style="color:${p.enabled ? tmpl.color : 'var(--muted)'}">${esc(p.name || tmpl.name)}<span class="dest-note">${note}</span></span>
-        <span class="small">${p._open ? '⌄' : '›'}</span>
-      </div>
-      <div class="dest-fields">${buildFields(p, tmpl, i)}<div class="row" style="justify-content:flex-end"><button class="btn sm coral" onclick="removeDest(${i})">Remove</button></div></div>`;
-    card.querySelector('.dest-card-hdr').onclick = () => { cfg.profiles[i]._open = !cfg.profiles[i]._open; renderDests(); };
-    card.querySelector('.dest-cb').onchange = e => { e.stopPropagation(); cfg.profiles[i].enabled = e.target.checked; destsChanged(); };
-    list.appendChild(card);
-  });
-  const n = cfg.profiles.filter(p => p.enabled).length;
-  $('dest-count').textContent = n ? `(${n} on)` : '';
-}
-function buildFields(p, tmpl, i) {
-  const f = {
-    streamKey: `<div class="field"><label>Stream key</label><input type="password" placeholder="Your stream key" value="${esc(p.streamKey)}" onchange="upDest(${i},'streamKey',this.value)"></div>`,
-    server:    `<div class="field"><label>Server (host:port)</label><input type="text" placeholder="radio.grooveline.org:8000" value="${esc(p.server)}" onchange="upDest(${i},'server',this.value)"></div>`,
-    mount:     `<div class="field"><label>Mount point</label><input type="text" placeholder="/live-yourname" value="${esc(p.mount)}" onchange="upDest(${i},'mount',this.value)"></div>`,
-    password:  `<div class="field"><label>Password</label><input type="password" value="${esc(p.password)}" onchange="upDest(${i},'password',this.value)"></div>`,
-  };
-  return tmpl.fields.map(k => f[k] || '').join('');
-}
-function upDest(i, k, v) { cfg.profiles[i][k] = v; saveCfg(); refreshUI(); }
-function removeDest(i) { cfg.profiles.splice(i, 1); destsChanged(); }
-async function destsChanged() {
-  const changed = updateAudioOnly();
-  saveCfg(); renderDests(); refreshUI();
-  if (changed && !isLive) await startPreview();
-}
-function showAddMenu() {
-  const old = $('dest-add-menu');
-  if (old) { old.remove(); return; }
-  const menu = document.createElement('div');
-  menu.id = 'dest-add-menu';
-  PLATFORMS.forEach(tmpl => {
-    const item = document.createElement('div');
-    item.className = 'add-menu-item';
-    item.textContent = tmpl.name;
-    item.onclick = () => {
-      cfg.profiles.push({ type: tmpl.type, name: tmpl.name, enabled: false, _open: true,
-        streamKey: '', server: tmpl.server || '', mount: '', password: '', rtmpBase: tmpl.rtmpBase || '' });
-      menu.remove(); destsChanged();
-    };
-    menu.appendChild(item);
-  });
-  $('add-dest-btn').after(menu);
-}
 
 // ── Live ───────────────────────────────────────────────────────────
 // checkProfile: the stream check's one-off /check-* destination. It replaces the enabled destinations for this run
@@ -1357,13 +1325,25 @@ async function toggleLive(ev, checkProfile) {
     return;
   }
   saveCfg();
+  if (!checkProfile) {
+    const b = loadedBooking();
+    if (!acctToken || !b) { addLog(acctToken ? 'No slot loaded. Book one on grooveline.org, then press ↻.' : 'Sign in first: your slot loads by itself.', 'warn'); showPage('onair'); return; }
+    // Fresh details at every GO LIVE (1.6.0): an old key or mount must never stream. Offline, the last load is used.
+    $('btn-go-live').disabled = true;
+    await acctLoadCredentialsFromBooking(b, { quiet: true, goLive: true });
+    const win = slotWindow(b);
+    if (win.state !== 'open') {
+      addLog(win.state === 'early' ? `Your slot opens for streaming at ${fmtTime(new Date(win.opensAt))}, 15 minutes before it starts.` : 'This slot has ended. Book your next one on grooveline.org.', 'warn');
+      refreshUI(); return;
+    }
+  }
   let show = checkProfile ? { profile: checkProfile, fallback: null } : pickShow();
   if (!show.profile) {
     addLog(acctToken ? 'No slot loaded. Book one on grooveline.org, then press ↻.' : 'Sign in first: your slot loads by itself.', 'warn');
     showPage('onair'); return;
   }
   if (!checkProfile) lastError = null;
-  if (isRecording && recModeNow === 'webm') { await toggleRecording(); addLog('Recording stopped: you went live. Press REC to record the show itself.', 'warn'); }
+  if (isRecording && (recModeNow === 'webm' || recModeNow === 'cam')) { await toggleRecording(); addLog('Recording stopped: you went live. Press REC to record the show itself.', 'warn'); }
   // Free the input before ffmpeg opens it: some Windows drivers allow only one app at a time.
   teardown();
   let hasVideo = isVideoDest(show.profile);
@@ -1393,9 +1373,14 @@ async function toggleLive(ev, checkProfile) {
     audioChannels: cfg.audioChannels || '0,1',
     videoDevice: cfg.videoDeviceIndex !== undefined ? cfg.videoDeviceIndex : '0',
     videoDeviceName: cfg.videoDeviceName || '',
-    audioOnly: !hasVideo, volume: cfg.volume ?? 100
+    audioOnly: !hasVideo, volume: cfg.volume ?? 100,
+    recordFolder: hasVideo && !checkProfile && cfg.recordVideoShows !== false ? recFolder : null,
   });
-  if (r.ok) setLive(true);
+  if (r.ok) {
+    setLive(true);
+    // No camera at GO LIVE: main.js already switched to the radio (stream-fallback), so there is no video to record.
+    if (hasVideo && !checkProfile && cfg.recordVideoShows !== false && recFolder && !liveOnRadioFallback) startShowRecordingUI();
+  }
   else {
     stopCanvasCapture();
     addLog('✗ ' + r.error, 'error');
@@ -1530,7 +1515,7 @@ let mediaRecorder = null;
 const fmtHints = {
   aac: 'AAC, 320 kbps, about 2.4 MB per minute. Plays everywhere.',
   wav: 'WAV, lossless, about 10 MB per minute. Studio quality, large files.',
-  mp4: 'MP4 (AAC 320 kbps). Video players open it; on a video slot it keeps the picture.'
+  mp4: 'MP4. On a video slot it records the camera with your input; otherwise audio only (AAC 320 kbps).'
 };
 function setRecFmt(fmt) {
   recFormat = fmt;
@@ -1564,35 +1549,46 @@ function setRecordingUI(active) {
   btn.classList.toggle('on', active);
   btn.textContent = active ? '● REC 00:00:00' : '● REC';
 }
+// A video show records itself in main.js (1.6.0); this only runs the REC indicator until recording-stopped.
+function startShowRecordingUI() {
+  isRecording = true; recModeNow = 'show'; recStartTime = Date.now();
+  setRecordingUI(true);
+  clearInterval(recTimerInterval);
+  recTimerInterval = setInterval(() => { $('btn-record').textContent = '● REC ' + fmtClock(Math.floor((Date.now() - recStartTime) / 1000)); }, 1000);
+  addRecLog('MP4 recording of your video show…');
+  addLog(`Recording your video show on this computer (${recFolder}). It is saved as MP4 when you press STOP.`, 'info');
+}
 async function toggleRecording() {
+  if (isRecording && recModeNow === 'show') { addLog('Your video show is being recorded: it is saved when you press STOP.', 'info'); return; }
   if (isRecording) {
     isRecording = false; clearInterval(recTimerInterval); setRecordingUI(false);
     if (recModeNow === 'webm') detachRecorderTap();
-    recModeNow = null;
+    // A camera recording keeps its mode until ffmpeg has let go of the camera (recording-stopped restarts the preview).
+    if (recModeNow !== 'cam') recModeNow = null;
     window.grooveline.stopRecording();
     return;
   }
   await window.grooveline.stopRecording(); // reset any stale backend state
   if (!recFolder) { try { recFolder = (await window.grooveline.getHomeDir()) + '/Music'; } catch(e) { addLog('Choose a recording folder in RECORDING first.', 'warn'); showPage('recording'); return; } }
   // While live, the radio (also a stream check or a radio fallback) records the meter tap: exactly what is sent.
-  // A video show records the picture from Grooveline's HLS stream. Not live: the input (or, on macOS, camera + input).
+  // A video show records itself (Record my video shows). Not live: the input; MP4 on a video slot adds the camera.
   const liveVideo = isLive && liveShowIsVideo && !liveOnRadioFallback;
+  if (liveVideo) { addLog("Video shows record by themselves when 'Record my video shows' is on in RECORDING. Turn it on before GO LIVE.", 'warn'); return; }
+  const camOk = !cfg.audioOnly && recFormat === 'mp4' && $('video-device').options.length > 1;
   // Linux, not live: the preview's ffmpeg meter is the exact input (Chromium may not even see it), so record from it.
-  const mode = isLive ? (liveVideo ? 'hls' : 'pcm') : previewTapOn ? 'pcm' : (!cfg.audioOnly && recFormat === 'mp4' && platform === 'darwin' ? 'avf' : 'webm');
+  const mode = isLive ? 'pcm' : camOk && platform !== 'darwin' ? 'cam' : previewTapOn ? 'pcm' : camOk ? 'avf' : 'webm';
   if (mode === 'webm' && !attachRecorderTap()) { addLog("Recording didn't start: no audio input. Check YOUR INPUT.", 'warn'); return; }
-  let hlsUrl = '';
-  if (mode === 'hls') {
-    const mtx = cfg.profiles.find(p => p.enabled && p.type === 'mediamtx');
-    if (!mtx || !mtx.streamKey) { addLog("Recording didn't start: no video stream key.", 'warn'); return; }
-    hlsUrl = `https://stream.grooveline.org/live/${mtx.streamKey}/index.m3u8`;
-  }
+  // The camera goes to ffmpeg: stop the preview first (main.js waits until Chromium has let go of it on Linux).
+  if (mode === 'cam') { teardown(); $('preview-ph').textContent = 'Recording from the camera…'; }
   const result = await window.grooveline.startRecording({
     format: recFormat, folder: recFolder, mode,
     sampleRate: cfg.quality.nativeSampleRate || 44100,
-    audioDevice: mode === 'hls' ? hlsUrl : (cfg.audioDeviceIndex !== undefined ? String(cfg.audioDeviceIndex) : cfg.audioDevice),
+    audioDevice: cfg.audioDeviceIndex !== undefined ? String(cfg.audioDeviceIndex) : cfg.audioDevice,
     videoDevice: cfg.videoDeviceIndex || '0', audioOnly: cfg.audioOnly, quality: cfg.quality,
+    cam: mode === 'cam' ? { videoDevice: cfg.videoDeviceIndex, videoDeviceName: cfg.videoDeviceName || '', audioDeviceName: cfg.audioDeviceName || '',
+      audioDevice: cfg.audioDeviceIndex !== undefined ? String(cfg.audioDeviceIndex) : cfg.audioDevice, audioChannels: cfg.audioChannels || '0,1', volume: cfg.volume ?? 100 } : null,
   });
-  if (!result.ok) { if (mode === 'webm') detachRecorderTap(); addLog('Recording failed: ' + result.error, 'error'); addRecLog('✗ ' + result.error); return; }
+  if (!result.ok) { if (mode === 'webm') detachRecorderTap(); addLog('Recording failed: ' + result.error, 'error'); addRecLog('✗ ' + result.error); if (mode === 'cam') startPreview(); return; }
   isRecording = true; recModeNow = mode; recStartTime = Date.now();
   setRecordingUI(true);
   recTimerInterval = setInterval(() => { $('btn-record').textContent = '● REC ' + fmtClock(Math.floor((Date.now() - recStartTime) / 1000)); }, 1000);
@@ -1601,8 +1597,11 @@ async function toggleRecording() {
 }
 function showRecInFolder() { if (lastRecPath) window.grooveline.showInFolder(lastRecPath); }
 window.grooveline.onRecordingLog(({ msg }) => addRecLog(msg));
-window.grooveline.onRecordingStopped(({ path: p, error }) => {
+window.grooveline.onRecordingStopped(({ path: p, error, note }) => {
+  const wasCam = recModeNow === 'cam';
   isRecording = false; recModeNow = null; clearInterval(recTimerInterval); setRecordingUI(false);
+  if (wasCam && !isLive) startPreview();
+  if (note) { addRecLog(note); addLog(note, 'info'); }
   if (p) {
     lastRecPath = p;
     $('rec-saved').hidden = false; $('rec-saved-path').textContent = p.split(/[\\/]/).pop();
@@ -1785,10 +1784,10 @@ async function acctLogout() {
   acctToken = null; acctUser = null; acctBookings = []; acctNextBooking = null; acctBookingsError = null; checkPassedAt = null;
   clearInterval(acctRefreshTimer);
   delete cfg._acctToken; delete cfg._bookingId;
-  // The booking's destinations belong to the account: they go with it. Hand-entered ones stay.
-  if (!isLive) cfg.profiles = cfg.profiles.filter(p => !p._grooveline && !p._grooveline_mtx);
+  // The booking's destinations belong to the account: they go with it.
+  if (!isLive) cfg.profiles = [];
   if (updateAudioOnly() && !isLive) startPreview();
-  saveCfg(); renderDests();
+  saveCfg();
   $('a-acct').textContent = 'Sign in'; $('a-acct').classList.add('out');
   addLog('Signed out.', 'info');
   refreshUI();
@@ -1809,6 +1808,7 @@ async function acctFetchBookings() {
   if (!acctToken) return;
   try {
     const res = await window.grooveline.apiBookings({ token: acctToken });
+    noteServerDate(res);
     if (res.status === 401) { addLog('Your sign-in expired. Sign in again.', 'warn'); await acctLogout(); return; }
     if (res.status !== 200) { acctBookingsError = (res.body && res.body.error) || `the server answered ${res.status}`; refreshUI(); return; }
     acctBookingsError = null;
@@ -1833,11 +1833,12 @@ async function acctFetchBookings() {
     const keep = acctBookings.find(b => b.id === cfg._bookingId);
     const target = keep || acctNextBooking;
     if (target) pick.value = target.id;
-    if (target && !isLive && (!keep || !cfg.profiles.some(p => p._grooveline))) await acctLoadCredentialsFromBooking(target, { quiet: true });
+    // Always reload the slot's details (1.6.0): the server's are the only ones that count.
+    if (target && !isLive) await acctLoadCredentialsFromBooking(target, { quiet: true });
     if (!target && !isLive && cfg.profiles.some(p => p._grooveline || p._grooveline_mtx)) {
       cfg.profiles = cfg.profiles.filter(p => !p._grooveline && !p._grooveline_mtx); delete cfg._bookingId;
       if (updateAudioOnly()) startPreview();
-      saveCfg(); renderDests();
+      saveCfg();
     }
   } catch(e) { acctBookingsError = 'no connection to grooveline.org'; console.error('[bookings]', e); }
   refreshUI();
@@ -1855,6 +1856,7 @@ async function acctLoadCredentialsFromBooking(booking, opts = {}) {
   if (isLive) return;
   try {
     const res = await window.grooveline.apiCredentials({ token: acctToken, bookingId: booking.id });
+    noteServerDate(res);
     const data = res.body || {};
     if (res.status !== 200) { showLoadMsg('error', "Couldn't load your stream details: " + (data.error || res.status)); return; }
     // Credentials endpoint: { server, port, mount_point, username, password, stream_key, stream_type, … }
@@ -1865,9 +1867,10 @@ async function acctLoadCredentialsFromBooking(booking, opts = {}) {
     const day = new Date(booking.start_time).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
     // Every booking has a radio mount, video slots too. On a video slot it stays off and is the fallback when there's
     // no camera (1.4.0).
+    const host = creds.server || creds.icecast_host || booking.icecast_host || 'radio.grooveline.org';
     const profile = {
       type: 'icecast', name: `Grooveline Radio — ${day}`, enabled: !isVideoSlot, _open: false, _grooveline: true,
-      server: creds.server || creds.icecast_host || booking.icecast_host || 'radio.grooveline.org',
+      server: host.includes(':') ? host : `${host}:${creds.port || 8000}`,
       mount: creds.mount_point || booking.mount_point || '/stream',
       username: creds.username || creds.icecast_username || booking.icecast_username || 'source',
       password: creds.password || creds.icecast_password || booking.source_password || '',
@@ -1876,12 +1879,12 @@ async function acctLoadCredentialsFromBooking(booking, opts = {}) {
     if (existing >= 0) cfg.profiles[existing] = profile; else cfg.profiles.push(profile);
     cfg.profiles = cfg.profiles.filter(p => !p._grooveline_mtx);
     if (isVideoSlot) cfg.profiles.push({ type: 'mediamtx', name: `Grooveline Video — ${day}`, enabled: true, _open: false, _grooveline_mtx: true,
-      rtmpBase: PLATFORMS.find(t => t.type === 'mediamtx').rtmpBase, streamKey });
+      rtmpBase: PLATFORMS.find(t => t.type === 'mediamtx').rtmpBase, streamKey, rtmpUrl: creds.rtmp_url || '' });
     cfg._bookingId = booking.id;
     const changed = updateAudioOnly();
-    saveCfg(); renderDests();
+    saveCfg();
     if (changed) await startPreview();
-    showLoadMsg('success', isVideoSlot ? '✓ Video slot loaded. Without a camera, your audio goes to the radio instead.' : '✓ Radio slot loaded.');
+    if (!opts.goLive) showLoadMsg('success', isVideoSlot ? '✓ Video slot loaded. Without a camera, your audio goes to the radio by itself.' : '✓ Radio slot loaded.');
     if (!opts.quiet || cfg._lastLoadedLog !== booking.id) { addLog(`Slot loaded: ${isVideoSlot ? 'Grooveline Video' : 'Grooveline Radio ' + profile.mount}, ${day} ${fmtTime(new Date(booking.start_time))}`, 'success'); cfg._lastLoadedLog = booking.id; }
   } catch(e) { showLoadMsg('error', 'No connection to grooveline.org: ' + e.message); }
   refreshUI();

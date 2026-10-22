@@ -111,8 +111,8 @@ from `GET /check/status` (our Icecast), polled every 3 s, never from ffmpeg.
     with a camera message, never "the audio input failed".
   - macOS: the renderer falls back when `startCanvasCapture` fails.
   - The UI shows `LIVE ● RADIO ONLY` (`stream-fallback` event).
-- **Known gap (site, not app):** a radio fallback on an rtmp booking makes `/api/live` return `stream_type: 'rtmp'`,
-  and the home page then shows the HLS video player instead of the audio player.
+- **Site gap, fixed server-side on 22 Oct (worker `0941e324`):** `/api/live` counts a live MediaMTX publish (HLS playlist
+  200) for an rtmp booking, and reports a radio fallback as `icecast`, so the home page plays the right player.
 
 ### Cameras (1.3.1, 21 Oct 2026)
 - The camera picker (`#video-row`) shows only when Grooveline Video is enabled (`isVideoDest`, since 1.4.0).
@@ -142,12 +142,13 @@ from `GET /check/status` (our Icecast), polled every 3 s, never from ffmpeg.
 - **Layout:** header (brand, version chip → About, status pill, account), tabs ON AIR / RECORDING / NOW PLAYING / LOG /
   HELP / SETTINGS, and an always-visible right strip (status, L/R meters, volume fader, GO LIVE, Stream check, REC).
   ON AIR = your slot → your input → Stream check. The Destinations tab is gone: the next booking loads by itself
-  after sign-in (`acctFetchBookings` → `acctLoadCredentialsFromBooking`); hand entry is Settings › Advanced.
+  after sign-in (`acctFetchBookings` → `acctLoadCredentialsFromBooking`); 1.6.0 removed hand entry.
   `refreshUI()` decides every status text, banner and button from the state; call it after changing state.
-- **Harness ids kept on purpose:** `log-output`, `stat-status`, `btn-go-live`, `video-row`, `video-device`, `dest-list`,
-  `acct-load-msg`, `chk-*`, and the functions `toggleLive`, `pickShow`, `startAppCheck`, `endAppCheck`, `openCheckModal`,
-  `acctFetchBookings`, `acctLoadCredentials`, `setLive`, `showAddMenu`. The harnesses in `~/.local/share/gl-testing/`
-  (outside the repo) use them, and the boot log line must still contain "Ready.".
+- **Harness ids kept on purpose:** `log-output`, `stat-status`, `st-sub`, `btn-go-live`, `btn-record`, `slot-body`,
+  `c-signin`, `video-row`, `video-device`, `preview-video`, `preview-ph`, `acct-load-msg`, `chk-*`, `set-recshow`, and the
+  functions `toggleLive`, `toggleRecording`, `setRecFmt`, `pickShow`, `startAppCheck`, `endAppCheck`, `openCheckModal`,
+  `acctFetchBookings`, `acctLoadCredentials`, `acctShowLoggedIn`, `setLive`, `refreshUI`. The harnesses in
+  `~/.local/share/gl-testing/` (outside the repo) use them, and the boot log line must still contain "Ready.".
 - **Meters:** while live, every ffmpeg command ends with `meterTapArgs()`: the stream's own audio chain (pair + volume)
   as 16-bit 44.1 kHz stereo on stdout. `attachMeterTap()` computes peak/RMS per 1470 frames and sends `meter` IPC at
   30 Hz; it also feeds live recording (`recMode 'pcm'`). **stdout must always be drained**, or ffmpeg blocks and the
@@ -213,3 +214,37 @@ See grooveline memory file for full context.
   - `bin/mac` ffmpeg (minos 10.12) and sox (minos 10.10) are x86_64-only and link only `/usr/lib` and `/System`.
     On Apple Silicon they need Rosetta.
 - **Windows build must run as Administrator.**
+
+### 1.6.0 (22 Oct 2026)
+- **No destinations to enter.** Settings › Advanced and ADD DESTINATION are gone (Zé: "login should load them, and by
+  date and hour be available to start"). On start, every profile not loaded from a booking is dropped (logged), and all
+  of them when signed out. The slot card says "No camera → your audio goes to the radio by itself" (no toggle).
+- **GO LIVE by slot time:** open from start − 15 min until the slot ends (`slotWindow`, `GO_EARLY_MS`). Times are the
+  server's clock: `apiRequest` returns the `Date` header and `noteServerDate` keeps `clockOffset`. States NOT YET /
+  READY / SLOT ENDED; `refreshUI` re-runs every 10 s while idle. The Stream check is not gated.
+- **Fresh details at every GO LIVE:** `toggleLive` reloads the credentials first (offline: the last load). Profiles use
+  the API's `rtmp_url` and `server:port`; `rtmpUrlOf()` in main falls back to base + key. `start-stream` refuses a video
+  profile without one.
+- **RTMP refusals:** MediaMTX accepts the connection and closes it ~2 s later when the key is denied; ffmpeg only sees a
+  reset. A video launch that dies within `RTMP_REFUSED_MS` (12 s) before `RTMP_CONFIRM_MS` (5 s) of sending is stage
+  `refused`; 3 in a row → give up with a slot-time/key message. Video sessions hold stream-stats ("ON AIR") and
+  "Connected" until 5 s of sending. Video retries back off 5/10/20/30 s (each relaunch reopens the camera).
+- **classifyLine** matches only "Server returned / HTTP error 401|403": 1.5.1 read libx264's `kb/s:403.68` as a 403.
+- **Video shows recorded locally (default on, RECORDING › Record my video shows):** one encode, `-f tee` with an FLV
+  branch and a Matroska branch (`onfail=ignore`, `-flags:v/a +global_header`, else FLV has no sequence headers). One
+  `.mkv` part per launch (`nextShowPart`), joined to one MP4 by `finishShowRecording` on STOP / give-up (parts < 6 s are
+  dropped; a part without a duration is read through). STOP sends `q` to ffmpeg's stdin (`_qStop`) so files get their
+  trailer; SIGTERM after 3 s. A quit while live leaves the `.mkv` parts. `maskSecrets` stops at `|` and `]`.
+  `teePath()` escapes paths for tee (forward slashes, `'|[]`). macOS canvas path has the same branch.
+- **Camera formats:** `v4l2InputArgs` / `dshowVideoArgs` ask the camera once (cached) and pick MJPEG at the stream size,
+  else raw at that size, else the smallest size that covers it, else the largest below (`pickCamFormat`). Logged as
+  "Camera: …" (tech). facetimehd → `yuyv422 1280x720`.
+- **MP4 with the camera when not live (Linux/Windows), mode `cam`:** the page stops its preview, main waits for
+  `videoHolders()` to empty (Linux), ffmpeg records camera + input; stopped with `q`; the preview restarts on
+  `recording-stopped`. The old `hls` live-recording mode is gone.
+- **Fewer camera opens:** the device-name probe runs only when labels are missing; on Linux an input change swaps only
+  the ffmpeg meter (`refreshPreviewAudio`). A camera Chromium can't open shows "No preview for this camera. It still
+  streams when you go live."
+- **Tests** (`~/.local/share/gl-testing/`): `gl-slot-mock.mjs` (signed-in DJ + slot, booking API mocked in main, local
+  fakes, server-clock shift), `bc-160-scenarios.mjs` (no camera, through `nocam-exe.sh`), `bc-160-checks.mjs` (levels,
+  REC, log), `bc-160-video.mjs` (REAL camera, tell Zé first; local RTMP sinks :19935 accepting, :19936 dropping after 2 s).

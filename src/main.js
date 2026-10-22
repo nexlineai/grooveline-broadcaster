@@ -1,6 +1,6 @@
 const { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage, dialog } = require('electron');
 const path = require('path');
-const { spawn } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 
@@ -24,7 +24,9 @@ let tray;
 function maskSecrets(s) {
   return String(s)
     .replace(/(\b[a-z][a-z0-9+.-]*:\/\/[^:\/\s@'"]+:)[^@\s'"]+@/gi, '$1****@')
-    .replace(/(\brtmps?:\/\/[^\s'"]+\/)[^\s\/'"]{6,}/gi, '$1****');
+    // Stop at '|' and ']': a video show's tee output ("[f=flv]rtmp://…/<key>|[f=matroska]/path/show.mkv") must mask
+    // the key, not the file name.
+    .replace(/(\brtmps?:\/\/[^\s'"|\]]+\/)[^\s\/'"|\]]{6,}/gi, '$1****');
 }
 
 // Guard all IPC sends — window may be destroyed on quit. Every Stream Log line also goes to the log file.
@@ -212,9 +214,82 @@ function findFFmpeg() {
 // Returns a single args array that feeds all profiles from one input.
 // recordingPath: if set, also tee to this file (mp4/aac/wav).
 // recordingFormat: 'aac'|'wav'|'mp4'
-function buildTeeArgs(profiles, quality, audioDevice, videoDevice, audioOnly, volume, audioChannels, audioDeviceName, videoDeviceName, recordingPath, recordingFormat) {
+// The booking's RTMP URL: the credentials API's rtmp_url since 1.6.0, else base + stream key.
+function rtmpUrlOf(p) {
+  if (p.rtmpUrl) return p.rtmpUrl;
+  return p.streamKey ? `${p.rtmpBase || ''}${p.streamKey}` : '';
+}
+
+// Stream size, capped at 720p: the server relay re-encodes for Telegram and 1080p pegs the 2-core VPS.
+function streamSize(quality) {
+  const m = String(quality.videoSize || '').match(/^(\d+)x(\d+)$/);
+  return m && +m[1] <= 1280 && +m[2] <= 720 ? `${m[1]}x${m[2]}` : '1280x720';
+}
+
+// ── Camera formats (1.6.0) ────────────────────────────────────────────────────
+// With no format given, ffmpeg opens a camera raw at its default size. Over USB 2 most webcams do 720p30 only as
+// MJPEG, so the stream was choppy or 640x480 scaled up. Ask each camera once what it offers: MJPEG at the stream
+// size first, then raw at that size, then the largest size below it. facetimehd is raw-only (yuyv422 1280x720).
+const camFormatCache = new Map();
+const sizeArea = sz => sz.split('x').reduce((a, b) => a * b, 1);
+function pickCamFormat(formats, size) {
+  const mj = formats.filter(f => f.mjpeg), raw = formats.filter(f => !f.mjpeg);
+  const [W, H] = size.split('x').map(Number);
+  const all = list => list.flatMap(f => f.sizes.map(sz => ({ f, sz, w: +sz.split('x')[0], h: +sz.split('x')[1] })));
+  const exact = list => list.find(f => f.sizes.includes(size) || f.range);
+  // The smallest size that covers the stream (scaled down, never up), else the largest below it.
+  const cover = list => all(list).filter(x => x.w >= W && x.h >= H).sort((a, b) => sizeArea(a.sz) - sizeArea(b.sz))[0];
+  const below = list => all(list).filter(x => sizeArea(x.sz) <= sizeArea(size)).sort((a, b) => sizeArea(b.sz) - sizeArea(a.sz))[0];
+  const f = exact(mj) || exact(raw);
+  if (f) return { f, sz: size };
+  const b = cover(mj) || cover(raw) || below(mj) || below(raw);
+  return b ? { f: b.f, sz: b.sz } : null;
+}
+function v4l2InputArgs(dev, size) {
+  const key = `v4l2|${dev}|${size}`;
+  if (camFormatCache.has(key)) return camFormatCache.get(key);
+  let out = '';
+  try { out = spawnSync(findFFmpeg(), ['-hide_banner', '-f', 'v4l2', '-list_formats', 'all', '-i', dev], { encoding: 'utf8', timeout: 4000 }).stderr || ''; } catch {}
+  // "[video4linux2,v4l2 @ 0x…] Compressed:       mjpeg :          Motion-JPEG : 640x480 1280x720"
+  const formats = [];
+  for (const line of out.split('\n')) {
+    const m = line.match(/\]\s*(Compressed|Raw)\s*:\s*(\S+)\s*:[^:]*:\s*(.*)$/);
+    if (m && !/emulated/i.test(line)) formats.push({ mjpeg: /mjpeg/i.test(m[2]), name: m[2], sizes: m[3].match(/\d+x\d+/g) || [], range: m[3].includes('{') });
+  }
+  const pick = pickCamFormat(formats, size);
+  const r = pick ? { args: ['-input_format', pick.f.mjpeg ? 'mjpeg' : pick.f.name, '-video_size', pick.sz], label: `${pick.f.mjpeg ? 'MJPEG' : pick.f.name} ${pick.sz}` }
+    : { args: [], label: 'camera default format' };
+  camFormatCache.set(key, r);
+  return r;
+}
+function dshowVideoArgs(name, size) {
+  const key = `dshow|${name}|${size}`;
+  if (camFormatCache.has(key)) return camFormatCache.get(key);
+  let out = '';
+  try { out = spawnSync(findFFmpeg(), ['-hide_banner', '-f', 'dshow', '-list_options', 'true', '-i', `video=${name}`], { encoding: 'utf8', timeout: 6000 }).stderr || ''; } catch {}
+  // "[dshow @ …]   vcodec=mjpeg  min s=1280x720 fps=5 max s=1280x720 fps=30"
+  const formats = [];
+  for (const line of out.split('\n')) {
+    const m = line.match(/(vcodec|pixel_format)=(\S+)\s+min s=(\d+x\d+) fps=[\d.]+\s+max s=(\d+x\d+) fps=([\d.]+)/);
+    if (m && parseFloat(m[5]) >= 25) {
+      const known = formats.find(f => f.kind === m[1] && f.name === m[2]);
+      if (known) known.sizes.push(m[4]); else formats.push({ kind: m[1], name: m[2], mjpeg: m[1] === 'vcodec' && m[2] === 'mjpeg', sizes: [m[4]] });
+    }
+  }
+  const pick = pickCamFormat(formats.filter(f => f.mjpeg || f.kind === 'pixel_format'), size);
+  const r = pick ? { args: [...(pick.f.mjpeg ? ['-vcodec', 'mjpeg'] : ['-pixel_format', pick.f.name]), '-video_size', pick.sz], label: `${pick.f.mjpeg ? 'MJPEG' : pick.f.name} ${pick.sz}` }
+    : { args: [], label: 'camera default format' };
+  camFormatCache.set(key, r);
+  return r;
+}
+
+// A file path inside a tee output spec: the tee muxer unescapes '\' and treats ' | [ ] specially.
+function teePath(p) { return String(p).replace(/\\/g, '/').replace(/(['|\[\]])/g, '\\$1'); }
+
+function buildTeeArgs(profiles, quality, audioDevice, videoDevice, audioOnly, volume, audioChannels, audioDeviceName, videoDeviceName, recordingPath, recordingFormat, onCamFormat) {
   const platform = process.platform;
   const args = [];
+  const size = streamSize(quality);
   const vol = Math.max(0, Math.min(100, volume ?? 100)) / 100;
   const parts = (audioChannels || '0,1').split(',');
   const cL = parseInt(parts[0]) || 0;
@@ -245,15 +320,20 @@ function buildTeeArgs(profiles, quality, audioDevice, videoDevice, audioOnly, vo
         '-analyzeduration', '0',
         '-i', `${avVideo}:${avAudio}`);
     } else if (platform === 'win32') {
-      args.push('-f', 'dshow', '-framerate', String(quality.fps || 30),
+      const camName = videoDeviceName || videoDevice || 'default';
+      const cf = dshowVideoArgs(camName, size);
+      if (onCamFormat) onCamFormat(cf.label);
+      args.push('-f', 'dshow', ...cf.args, '-framerate', String(quality.fps || 30),
         '-audio_buffer_size', '50',
-        '-i', `video=${videoDeviceName || videoDevice || 'default'}:audio=${audioDeviceName || 'default'}`);
+        '-i', `video=${camName}:audio=${audioDeviceName || 'default'}`);
     } else {
       // videoDevice is a /dev/videoN path from listV4l2Devices(); anything else (old configs saved
       // '0') falls back to the first camera, so ffmpeg never gets a bare index it can't open.
       const v4l = /^\/dev\/video\d+$/.test(String(videoDevice || '')) ? String(videoDevice)
         : ((listV4l2Devices()[0] || {}).path || '/dev/video0');
-      args.push('-f', 'v4l2', '-framerate', String(quality.fps || 30), '-i', v4l);
+      const cf = v4l2InputArgs(v4l, size);
+      if (onCamFormat) onCamFormat(cf.label);
+      args.push('-f', 'v4l2', ...cf.args, '-framerate', String(quality.fps || 30), '-i', v4l);
       args.push('-f', 'pulse', '-ar', String(nativeSampleRate), '-ac', String(capChannels),
         '-i', pulseSource(audioDeviceName, audioDevice));
     }
@@ -267,16 +347,7 @@ function buildTeeArgs(profiles, quality, audioDevice, videoDevice, audioOnly, vo
 
   // ── Shared video encode (reused across all outputs via tee) ──
   if (!audioOnly) {
-    let sz = quality.videoSize || '1280x720';
-    // Hard cap at 720p — server relay decodes+re-encodes for Telegram; 1080p pegs the 2-core VPS
-    const m = sz.match(/^(\d+)x(\d+)$/);
-    if (m) {
-      const w = parseInt(m[1]), h = parseInt(m[2]);
-      if (w > 1280 || h > 720) sz = '1280x720';
-    } else {
-      sz = '1280x720';
-    }
-    const [w, h] = sz.split('x');
+    const [w, h] = size.split('x');
     args.push(
       '-vf', `setpts=PTS-STARTPTS,format=yuv420p,scale=${w}:${h}:force_original_aspect_ratio=increase,crop=${w}:${h}`,
       '-vcodec', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency',
@@ -309,23 +380,25 @@ function buildTeeArgs(profiles, quality, audioDevice, videoDevice, audioOnly, vo
       // Separate -map + codec flags before this output
       teeOutputs.push({ icecast: true, url, password: profile.password, server: serverWithPort, mount: profile.mount, iceUser });
     } else {
-      const rtmpUrl = profile.type === 'custom' ? profile.rtmpUrl : `${profile.rtmpBase}${profile.streamKey}`;
-      teeOutputs.push({ icecast: false, url: rtmpUrl, audioOnly });
+      teeOutputs.push({ icecast: false, url: rtmpUrlOf(profile), audioOnly });
     }
   });
-
-  if (recordingPath) {
-    teeOutputs.push({ recording: true, path: recordingPath, format: recordingFormat || 'aac', audioOnly });
-  }
 
   // If only one non-icecast output and no icecast, use simple output (no tee complexity)
   const icecastOutputs = teeOutputs.filter(o => o.icecast);
   const otherOutputs = teeOutputs.filter(o => !o.icecast);
 
-  if (icecastOutputs.length === 0 && otherOutputs.length === 1 && !otherOutputs[0].recording) {
-    // Simple single RTMP output
+  if (icecastOutputs.length === 0 && otherOutputs.length === 1) {
     const o = otherOutputs[0];
-    args.push('-f', 'flv', '-flvflags', 'no_duration_filesize', o.url);
+    if (recordingPath && !audioOnly) {
+      // Video show recorded on this computer (1.6.0): one encode, two outputs. The file branch may fail without
+      // touching the stream. Through tee, FLV needs the encoders' global headers (no AVC/AAC sequence header
+      // otherwise); Matroska keeps them, survives a crash, and is remuxed to MP4 when the show ends.
+      args.push('-map', '0:v', '-map', platform === 'win32' ? '0:a' : '1:a', '-flags:v', '+global_header', '-flags:a', '+global_header',
+        '-f', 'tee', `[f=flv:flvflags=no_duration_filesize]${o.url}|[f=matroska:onfail=ignore]${teePath(recordingPath)}`);
+    } else {
+      args.push('-f', 'flv', '-flvflags', 'no_duration_filesize', o.url);
+    }
     args.push(...tap);
     return args;
   }
@@ -559,7 +632,13 @@ const activeProcesses = [];
 
 function stopAllStreams() {
   endLiveSession();
-  activeProcesses.forEach(p => { try { p.kill('SIGTERM'); } catch {} });
+  // ffmpeg finishes its files on 'q' (a video show's recording needs its trailer); a signal is the fallback.
+  activeProcesses.forEach(p => {
+    if (p._qStop && p.stdin && !p.stdin.destroyed) {
+      try { p.stdin.write('q'); } catch {}
+      setTimeout(() => { if (p.exitCode === null && p.signalCode === null) { try { p.kill('SIGTERM'); } catch {} } }, 3000);
+    } else { try { p.kill('SIGTERM'); } catch {} }
+  });
   activeProcesses.length = 0;
   isStreaming = false;
   videoFfmpegProc = null;
@@ -585,7 +664,14 @@ const STALL_MS = 15000;        // progress lines stopped → the path is dead
 const FIRST_DATA_MS = 30000;   // a launch that never starts sending
 const HEALTHY_MS = 20000;      // sending this long → reset the failure counters
 const AUTH_GRACE_MS = 120000;  // 401s are expected while a new mount syncs (1-min cron)
+// Video (1.6.0): every relaunch reopens the camera, and facetimehd wedged on 21 Oct after a reopen every few seconds.
+const VIDEO_RETRY_DELAYS_S = [5, 10, 20, 30];
+// MediaMTX accepts the RTMP connection, asks Grooveline about the stream key, and closes it about 2 s later when the
+// answer is no. ffmpeg only sees "Connection reset by peer", so a reset this soon after launch counts as a refusal.
+const RTMP_REFUSED_MS = 12000;
+const RTMP_CONFIRM_MS = 5000;  // sending this long on RTMP = past the key check → ON AIR / "Connected"
 const STAGE_TEXT = {
+  refused: "Grooveline's video server refused the stream: the slot isn't open for streaming (from 15 minutes before it starts until it ends), or the stream key is out of date",
   auth: 'the server refused the password (a new mount can take up to a minute to be ready)',
   mount_in_use: 'the server is still holding your previous connection — it lets go by itself, keep the app open',
   device: 'the audio input stopped or is unavailable',
@@ -610,8 +696,11 @@ function stageText(s, stage) {
 const CAMERA_LINE = /\/dev\/video\d|video4linux|v4l2|video device|Could not set video options/i;
 
 function classifyLine(line) {
-  if (/\b401\b|Unauthorized/i.test(line)) return 'auth';
-  if (/\b403\b|Forbidden/i.test(line)) return 'mount_in_use';
+  // Only the server's own answer counts. 1.5.1 read libx264's exit summary "kb/s:403.68" as a 403 and told a DJ the
+  // server was holding an old connection (22 Oct).
+  if (/\bkb\/s:|Qavg|frame I:|frame P:/.test(line)) return null;
+  if (/(Server returned|HTTP error) 401\b|\b401 Unauthorized/i.test(line)) return 'auth';
+  if (/(Server returned|HTTP error) 403\b|\b403 Forbidden/i.test(line)) return 'mount_in_use';
   if (/Error opening output|Connection refused|timed out|Network is unreachable|No route to host|resolve|not known|nodename|Connection reset|Broken pipe|End of file|Error writing trailer/i.test(line)) return 'network';
   if (/Error opening input|sox FAIL|can't open input|Could not (find|open)|No such (file|device)|Device or resource busy|I\/O error|Unknown input format/i.test(line)) return CAMERA_LINE.test(line) ? 'camera' : 'device';
   if (/Unknown encoder|Error initializing output stream|Error while opening encoder/i.test(line)) return 'encoder';
@@ -638,6 +727,15 @@ function reportSetup(event, fields) {
 
 function tagProc(proc) { if (liveSession) proc._gen = liveSession.gen; return proc; }
 
+function isVideoSession(s) { return !!(s && !s.opts.audioOnly && s.opts.profiles.some(p => p.type === 'mediamtx')); }
+
+// True once this launch's sending counts: at once on the radio, after RTMP_CONFIRM_MS on video (see RTMP_REFUSED_MS).
+// Until then the renderer gets no stream-stats, so it keeps saying CONNECTING instead of ON AIR.
+function progressConfirmed(s) {
+  if (!s) return true;
+  return !!s.firstProgressAt && (!isVideoSession(s) || Date.now() - s.firstProgressAt >= RTMP_CONFIRM_MS);
+}
+
 // Called from every pipeline stderr handler.
 function superviseLine(proc, line) {
   const s = liveSession;
@@ -646,8 +744,10 @@ function superviseLine(proc, line) {
     const t = (line.match(/time=\s*(\S+)/) || [])[1];
     if (t && t === s.lastTime) return; // a repeated report is not progress
     s.lastTime = t;
-    const first = !s.lastProgress;
     s.lastProgress = Date.now();
+    if (!s.firstProgressAt) s.firstProgressAt = s.lastProgress;
+    const first = !s.confirmed && progressConfirmed(s);
+    if (first) s.confirmed = true;
     if (first && s.uiReconnecting) {
       s.uiReconnecting = false;
       const secs = s.outageStart ? Math.round((Date.now() - s.outageStart) / 1000) : null;
@@ -695,7 +795,8 @@ function scheduleRestart(why) {
   activeProcesses.splice(0).forEach(p => { try { p.kill('SIGTERM'); } catch {} });
   videoFfmpegProc = null; videoSoxProc = null;
 
-  const stage = s.stage || (s.lastProgress ? 'network' : 'stalled');
+  let stage = s.stage || (s.lastProgress ? 'network' : 'stalled');
+  if (stage === 'network' && isVideoSession(s) && !s.confirmed && Date.now() - s.launchedAt < RTMP_REFUSED_MS) stage = 'refused';
   const toRadio = stage === 'camera' && fallBackToRadio(s.sender, s.opts, 'The camera failed');
   s.sameStageFails = toRadio ? 0 : stage === s.prevStage ? s.sameStageFails + 1 : 1;
   s.prevStage = toRadio ? null : stage;
@@ -703,7 +804,7 @@ function scheduleRestart(why) {
   // the sync agent's 1-minute cron, so 401 is expected at first: keep trying for
   // AUTH_GRACE_MS from GO LIVE before calling the password wrong.
   const inAuthGrace = stage === 'auth' && Date.now() - s.sessionStart < AUTH_GRACE_MS;
-  if (['auth', 'device', 'camera', 'encoder'].includes(stage) && s.sameStageFails >= 3 && !inAuthGrace) return giveUp(stage);
+  if (['auth', 'device', 'camera', 'encoder', 'refused'].includes(stage) && s.sameStageFails >= 3 && !inAuthGrace) return giveUp(stage);
 
   if (!s.everLive && !s.reportedError) {
     s.reportedError = true;
@@ -717,10 +818,11 @@ function scheduleRestart(why) {
   s.uiReconnecting = true;
   // While a new mount syncs, retry every 5 s: backing off to 30 s left a DJ
   // waiting up to half a minute after the mount was already there.
+  const delays = isVideoSession(s) ? VIDEO_RETRY_DELAYS_S : RETRY_DELAYS_S;
   const delay = toRadio ? 2
     : stage === 'mount_in_use' ? 15
     : inAuthGrace ? 5
-    : RETRY_DELAYS_S[Math.min(s.attempt - 1, RETRY_DELAYS_S.length - 1)];
+    : delays[Math.min(s.attempt - 1, delays.length - 1)];
   safeSend(s.sender, 'stream-reconnecting', { attempt: s.attempt, delay, stage, message: stageText(s, stage) || why });
   safeSend(s.sender, 'stream-log', { type: 'warn', msg: `⟳ ${stageText(s, stage) || why} — retry ${s.attempt} in ${delay}s${s.lastLine ? ` (${s.lastLine.trim().slice(0, 160)})` : ''}` });
   s.restartTimer = setTimeout(() => {
@@ -738,11 +840,14 @@ function giveUp(stage) {
     ? 'Stopped: the audio input failed 3 times. Check the device in Sources and press GO LIVE again.'
     : stage === 'camera'
     ? 'Stopped: the camera failed 3 times. Check it is plugged in and not open in another app, then press GO LIVE again.'
+    : stage === 'refused'
+    ? "Stopped: Grooveline's video server refused the stream 3 times. Your slot opens for streaming 15 minutes before it starts and closes when it ends. Press ↻ on your slot to reload its details, then GO LIVE again."
     : 'Stopped: the encoder failed 3 times. Copy the Stream Log and send it to us.';
   reportSetup('app_gave_up', { stage, detail: s.lastLine || why });
   safeSend(s.sender, 'stream-log', { type: 'error', msg: why });
   const sender = s.sender;
   endLiveSession();
+  finishShowRecording(s);
   isStreaming = false;
   safeSend(sender, 'stream-stopped', { reason: why, stage });
 }
@@ -800,7 +905,7 @@ function checkServerHealth(s) {
 function relaunch() {
   const s = liveSession;
   s.gen++; s.tearingDown = false; s.stage = null; s.lastLine = '';
-  s.lastProgress = 0; s.lastTime = null; s.launchedAt = Date.now();
+  s.lastProgress = 0; s.lastTime = null; s.launchedAt = Date.now(); s.firstProgressAt = 0; s.confirmed = false;
   s.healthFails = 0; s.missingSince = 0; s.healthBusy = false; s.lastHealth = 0;
   let r;
   try { r = launchPipeline(s.event, s.opts); } catch (e) { r = { ok: false, error: e.message }; }
@@ -832,6 +937,68 @@ function endLiveSession() {
   if (s.watchdog) clearInterval(s.watchdog);
   if (s.restartTimer) clearTimeout(s.restartTimer);
   liveSession = null;
+}
+
+// ─── Video show recorded on this computer (1.6.0) ─────────────────────────────
+// Every launch of a video show writes one Matroska part next to the stream (tee, no second encode). STOP or a
+// give-up joins the parts into one MP4. Parts under 6 s are refusals or false starts and are dropped. A quit while
+// live leaves the .mkv parts in the folder: they play as they are.
+function nextShowPart(opts) {
+  const rec = liveSession && liveSession.showRec;
+  if (!rec || opts.audioOnly) return null;
+  try { fs.mkdirSync(rec.folder, { recursive: true }); } catch {}
+  const p = path.join(rec.folder, `${rec.base}-part${rec.parts.length + 1}.mkv`);
+  rec.parts.push(p);
+  return p;
+}
+function partSeconds(ffmpeg, file) {
+  try {
+    const size = fs.statSync(file).size;
+    const out = spawnSync(ffmpeg, ['-hide_banner', '-i', file], { encoding: 'utf8', timeout: 8000 }).stderr || '';
+    const m = out.match(/Duration:\s*(\d+):(\d+):([\d.]+)/);
+    if (m) return +m[1] * 3600 + +m[2] * 60 + parseFloat(m[3]);
+    // A part cut off by a relaunch has no duration in its header: read it through (copy, fast) and take the last time=.
+    const r = spawnSync(ffmpeg, ['-hide_banner', '-i', file, '-map', '0', '-c', 'copy', '-f', 'null', '-'], { encoding: 'utf8', timeout: 60000 }).stderr || '';
+    const t = [...r.matchAll(/time=\s*(\d+):(\d+):([\d.]+)/g)].pop();
+    return t ? +t[1] * 3600 + +t[2] * 60 + parseFloat(t[3]) : size > 2e6 ? Infinity : 0;
+  } catch { return 0; }
+}
+async function finishShowRecording(s) {
+  const rec = s && s.showRec;
+  if (!rec || rec.finishing) return;
+  rec.finishing = true;
+  const sender = s.sender;
+  // No camera from the start: the show went to the radio and nothing was recorded. Just end the REC indicator.
+  if (!rec.parts.length) { safeSend(sender, 'recording-stopped', {}); return; }
+  // The stream's ffmpeg writes the Matroska trailer when it exits after SIGTERM.
+  const deadline = Date.now() + 8000;
+  while (s.showProcs.some(p => p.exitCode === null && p.signalCode === null) && Date.now() < deadline) await new Promise(r => setTimeout(r, 200));
+  const ffmpeg = findFFmpeg();
+  const keep = rec.parts.filter(p => fs.existsSync(p) && partSeconds(ffmpeg, p) >= 6);
+  rec.parts.filter(p => !keep.includes(p)).forEach(p => { try { fs.unlinkSync(p); } catch {} });
+  if (!keep.length) { safeSend(sender, 'recording-stopped', { note: 'No show recording: the video never got on air.' }); return; }
+  const out = path.join(rec.folder, `${rec.base}.mp4`);
+  safeSend(sender, 'recording-log', { msg: 'Saving the show as MP4…' });
+  let list = null, args;
+  if (keep.length === 1) args = ['-hide_banner', '-y', '-i', keep[0], '-c', 'copy', '-movflags', '+faststart', out];
+  else {
+    list = path.join(rec.folder, `${rec.base}-parts.txt`);
+    fs.writeFileSync(list, keep.map(p => `file '${p.replace(/\\/g, '/').replace(/'/g, "'\\''")}'`).join('\n') + '\n');
+    args = ['-hide_banner', '-y', '-f', 'concat', '-safe', '0', '-i', list, '-c', 'copy', '-movflags', '+faststart', out];
+  }
+  const proc = spawn(ffmpeg, args, { stdio: ['ignore', 'ignore', 'pipe'] });
+  let err = '';
+  proc.stderr.on('data', d => { err = (err + d).slice(-4000); });
+  proc.on('close', code => {
+    if (list) { try { fs.unlinkSync(list); } catch {} }
+    if (code === 0) {
+      keep.forEach(p => { try { fs.unlinkSync(p); } catch {} });
+      safeSend(sender, 'recording-stopped', { path: out });
+    } else {
+      safeSend(sender, 'recording-stopped', { error: `Saving the show as MP4 failed (${err.trim().split('\n').pop()}). The recording is kept as ${keep.map(p => path.basename(p)).join(', ')}.` });
+    }
+  });
+  proc.on('error', e => safeSend(sender, 'recording-stopped', { error: `Saving the show failed (${e.message}). The .mkv parts are kept.` }));
 }
 
 // ─── IPC Handlers ─────────────────────────────────────────────────────────────
@@ -969,7 +1136,7 @@ function startSoxStream(event, profile, quality, deviceName, audioChannels, volu
 let videoFfmpegProc = null; // ffmpeg process reading raw video from stdin
 let videoSoxProc = null;    // sox process piping audio to ffmpeg fd3
 
-function startVideoStream(event, ffmpeg, profiles, quality, audioDeviceName, volume, audioChannels) {
+function startVideoStream(event, ffmpeg, profiles, quality, audioDeviceName, volume, audioChannels, recordingPath) {
   const sox = findSox();
   const fps = quality.fps || 30;
   const vol = Math.max(0, Math.min(100, volume ?? 100)) / 100;
@@ -1003,8 +1170,11 @@ function startVideoStream(event, ffmpeg, profiles, quality, audioDeviceName, vol
   const icecastProfiles = profiles.filter(p => p.type === 'icecast' || p.type === 'shoutcast');
 
   rtmpProfiles2.forEach(p => {
-    const url = p.type === 'custom' ? p.rtmpUrl : `${p.rtmpBase}${p.streamKey}`;
-    args.push('-f', 'flv', url);
+    const url = rtmpUrlOf(p);
+    // Same local show recording as buildTeeArgs (1.6.0): video from the canvas pipe (0), audio from sox (1).
+    if (recordingPath) args.push('-map', '0:v', '-map', '1:a', '-flags:v', '+global_header', '-flags:a', '+global_header',
+      '-f', 'tee', `[f=flv:flvflags=no_duration_filesize]${url}|[f=matroska:onfail=ignore]${teePath(recordingPath)}`);
+    else args.push('-f', 'flv', url);
   });
   // Icecast outputs: audio-only from input 1 (sox pipe)
   icecastProfiles.forEach(p => {
@@ -1081,6 +1251,7 @@ function startVideoStream(event, ffmpeg, profiles, quality, audioDeviceName, vol
     if (isStreaming && activeProcesses.filter(p => !p.killed).length === 0) {
       isStreaming = false;
       safeSend(event.sender, 'stream-stopped', {});
+      finishShowRecording(liveSession); // unsupervised: the show ended without STOP
     }
   });
   safeSend(event.sender, 'stream-log', { type: 'success', msg: '✓ Video stream started (sox audio + canvas video)', tech: true });
@@ -1107,7 +1278,9 @@ function spawnFFmpeg(event, ffmpeg, args) {
     spawnArgs = ['-n', '-10', ffmpeg, ...args];
   }
   safeSend(event.sender, 'stream-log', { type: 'info', msg: `CMD: ffmpeg ${args.join(' ')}`, tech: true });
-  const proc = tagProc(spawn(cmd, spawnArgs, { stdio: ['ignore', 'pipe', 'pipe'] }));
+  const proc = tagProc(spawn(cmd, spawnArgs, { stdio: ['pipe', 'pipe', 'pipe'] }));
+  proc._qStop = true; // stdin only carries 'q' (stopAllStreams)
+  proc.stdin.on('error', () => {});
   activeProcesses.push(proc);
   attachMeterTap(proc, event.sender);
   proc.stderr.on('data', (data) => {
@@ -1115,6 +1288,7 @@ function spawnFFmpeg(event, ffmpeg, args) {
     lines.forEach(line => {
       superviseLine(proc, line);
       if (line.includes('size=') || line.includes('time=')) {
+        if (liveSession && proc._gen === liveSession.gen && !progressConfirmed(liveSession)) return;
         const match = line.match(/bitrate=\s*([\d.]+)kbits/);
         safeSend(event.sender, 'stream-stats', { bitrate: match ? match[1] : null });
       } else if (line.match(/error|Error|failed|Broken pipe/i) && !line.includes('Qavg')) {
@@ -1147,6 +1321,9 @@ ipcMain.handle('start-stream', async (event, opts) => {
   if (activeProfiles.length !== 1 || !['icecast', 'mediamtx'].includes(activeProfiles[0].type)) {
     return { ok: false, error: 'This app streams to one Grooveline destination at a time: your radio slot or your video slot.' };
   }
+  if (activeProfiles[0].type === 'mediamtx' && !rtmpUrlOf(activeProfiles[0])) {
+    return { ok: false, error: 'Your video slot has no stream key. Press ↻ on your slot to load it again.' };
+  }
   opts.profiles = activeProfiles;
   opts.audioOnly = activeProfiles[0].type === 'icecast';
   const fb = opts.fallbackProfile;
@@ -1172,7 +1349,10 @@ ipcMain.handle('start-stream', async (event, opts) => {
     // The macOS canvas-video path can't be relaunched mid-stream (the renderer's
     // webm stream has no header after a restart) — it keeps the old behaviour.
     supervise: !(process.platform === 'darwin' && hasRtmp && !opts.audioOnly),
-    launchedAt: Date.now(), lastProgress: 0, stage: null, lastLine: '',
+    launchedAt: Date.now(), lastProgress: 0, stage: null, lastLine: '', firstProgressAt: 0, confirmed: false,
+    showRec: !opts.audioOnly && !opts.soundCheck && opts.recordFolder
+      ? { folder: opts.recordFolder, base: `grooveline-show-${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}`, parts: [] } : null,
+    showProcs: [],
   };
   const needAudioName = !opts.audioDeviceName || opts.audioDeviceName === 'default';
   if (process.platform === 'win32' && (needAudioName || !opts.audioOnly)) {
@@ -1241,8 +1421,10 @@ function launchPipeline(event, opts) {
 
     if (rtmpProfiles.length > 0 && !audioOnly) {
       try {
-        const proc = startVideoStream(event, ffmpeg, rtmpProfiles, quality, devName, volume, audioChannels);
+        const recPath = nextShowPart(opts);
+        const proc = startVideoStream(event, ffmpeg, rtmpProfiles, quality, devName, volume, audioChannels, recPath);
         if (proc) launched++;
+        if (proc && recPath && liveSession) liveSession.showProcs.push(proc);
       } catch(e) {
         safeSend(event.sender, 'stream-log', { type: 'error', msg: `✗ Video stream failed: ${e.message}` });
       }
@@ -1259,10 +1441,13 @@ function launchPipeline(event, opts) {
   }
 
   // Windows / Linux: single ffmpeg for all profiles
-  const args = buildTeeArgs(activeProfiles, quality, audioDevice, videoDevice, audioOnly, volume, audioChannels, audioDeviceName, videoDeviceName, null, null);
+  const recPath = nextShowPart(opts);
+  const args = buildTeeArgs(activeProfiles, quality, audioDevice, videoDevice, audioOnly, volume, audioChannels, audioDeviceName, videoDeviceName, recPath, null,
+    label => { if (liveSession && liveSession.camLabel !== label) { liveSession.camLabel = label; safeSend(event.sender, 'stream-log', { type: 'info', msg: `Camera: ${label}`, tech: true }); } });
   try {
     const proc = spawnFFmpeg(event, ffmpeg, args);
     if (!proc) return { ok: false, error: 'Failed to launch' };
+    if (recPath && liveSession) liveSession.showProcs.push(proc);
     return { ok: true, launched: 1 };
   } catch(e) {
     return { ok: false, error: e.message };
@@ -1270,8 +1455,10 @@ function launchPipeline(event, opts) {
 }
 
 ipcMain.handle('stop-stream', (event) => {
+  const s = liveSession;
   stopAllStreams();
   safeSend(event.sender, 'stream-log', { type: 'info', msg: 'Stream stopped by user' });
+  finishShowRecording(s);
   return { ok: true };
 });
 
@@ -1398,7 +1585,7 @@ let recMode = 'webm'; // 'webm' = MediaRecorder chunks, 'pcm' = tap from pcm-chu
 let recFfmpegProc = null; // ffmpeg process for pcm-tap recording
 let recSampleRate = 44100;
 
-ipcMain.handle('start-recording', async (event, { format, folder, mode, sampleRate, audioDevice, videoDevice, audioOnly, quality }) => {
+ipcMain.handle('start-recording', async (event, { format, folder, mode, sampleRate, audioDevice, videoDevice, audioOnly, quality, cam }) => {
   if (recWriteStream || recFfmpegProc) return { ok: false, error: 'Already recording' };
   recFormat2 = format || 'aac';
   recMode = mode || 'webm';
@@ -1466,38 +1653,52 @@ ipcMain.handle('start-recording', async (event, { format, folder, mode, sampleRa
     }
   }
 
-  // HLS recording mode: pull from the live HLS stream — zero device conflict, no extra CPU on client
-  if (recMode === 'hls') {
+  // Camera + input to MP4 while not live, Linux and Windows (1.6.0; until then MP4 held only audio there). The page
+  // stops its preview first so ffmpeg can open the camera; on Linux we also wait until Chromium has let go of it.
+  if (recMode === 'cam' && process.platform !== 'darwin' && cam) {
     const ffmpeg = findFFmpeg();
-    const hlsUrl = String(audioDevice); // reused field — holds the HLS URL
-    const ffArgs = [
-      '-i', hlsUrl,
-      '-c', 'copy',
-      '-f', ext === 'wav' ? 'wav' : 'mp4',
-      '-y', recOutPath
-    ];
+    const size = streamSize(quality || {});
+    const [w, h] = size.split('x');
+    const fps = (quality && quality.fps) || 30;
+    const parts = (cam.audioChannels || '0,1').split(',');
+    const cL = parseInt(parts[0]) || 0, cR = parseInt(parts[1] !== undefined ? parts[1] : parts[0]) || 1;
+    const vol = Math.max(0, Math.min(100, cam.volume ?? 100)) / 100;
+    const ffArgs = ['-hide_banner'];
+    if (process.platform === 'win32') {
+      const cams = (await listDshowDevices()).videoDevices || [];
+      const name = cams.some(c => c.name === cam.videoDeviceName) ? cam.videoDeviceName : (cams[0] || {}).name;
+      if (!name) return { ok: false, error: 'No camera found.' };
+      ffArgs.push('-f', 'dshow', ...dshowVideoArgs(name, size).args, '-framerate', String(fps), '-audio_buffer_size', '50',
+        '-i', `video=${name}:audio=${cam.audioDeviceName || 'default'}`, '-map', '0:v', '-map', '0:a');
+    } else {
+      const devs = listV4l2Devices();
+      const dev = devs.some(d => d.path === cam.videoDevice) ? cam.videoDevice : (devs[0] || {}).path;
+      if (!dev) return { ok: false, error: 'No camera found.' };
+      for (let t = Date.now(); videoHolders().length && Date.now() - t < 2500;) await new Promise(r => setTimeout(r, 100));
+      const capCh = Math.max(2, cL + 1, cR + 1);
+      ffArgs.push('-f', 'v4l2', ...v4l2InputArgs(dev, size).args, '-framerate', String(fps), '-thread_queue_size', '512', '-i', dev,
+        '-f', 'pulse', '-ar', String(sampleRate || 44100), '-ac', String(capCh), '-thread_queue_size', '512',
+        '-i', pulseSource(cam.audioDeviceName, cam.audioDevice), '-map', '0:v', '-map', '1:a');
+    }
+    ffArgs.push('-af', `asetpts=PTS-STARTPTS,pan=stereo|c0=c${cL}|c1=c${cR},volume=${vol}`,
+      '-vf', `setpts=PTS-STARTPTS,format=yuv420p,scale=${w}:${h}:force_original_aspect_ratio=increase,crop=${w}:${h}`,
+      '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23', '-r', String(fps),
+      '-c:a', 'aac', '-b:a', '192k', '-ar', '44100', '-ac', '2', '-movflags', '+faststart', '-y', recOutPath);
     try {
-      recFfmpegProc = spawn(ffmpeg, ffArgs, { stdio: ['ignore', 'ignore', 'pipe'] });
+      recFfmpegProc = spawn(ffmpeg, ffArgs, { stdio: ['pipe', 'ignore', 'pipe'] });
       let errOut = '';
-      recFfmpegProc.stderr.on('data', d => { errOut += d.toString(); });
+      recFfmpegProc.stderr.on('data', d => { errOut = (errOut + d).slice(-4000); });
       recFfmpegProc.on('close', (code) => {
         recFfmpegProc = null;
-        if (code === 0 || code === 255) {
-          safeSend(mainWindow.webContents, 'recording-stopped', { path: recOutPath });
-        } else {
-          const errLine = errOut.split('\n').filter(l=>l.trim()).slice(-3).join(' | ');
-          safeSend(mainWindow.webContents, 'recording-stopped', { error: 'HLS recording failed: ' + errLine });
-        }
+        if (code === 0 || code === 255) safeSend(mainWindow.webContents, 'recording-stopped', { path: recOutPath });
+        else safeSend(mainWindow.webContents, 'recording-stopped', { error: 'Camera recording failed: ' + errOut.split('\n').filter(l => l.trim()).slice(-2).join(' | ') });
         recOutPath = null;
       });
-      recFfmpegProc.on('error', (err) => {
-        recFfmpegProc = null; recOutPath = null;
-        safeSend(mainWindow.webContents, 'recording-stopped', { error: err.message });
-      });
+      recFfmpegProc.on('error', (err) => { recFfmpegProc = null; recOutPath = null; safeSend(mainWindow.webContents, 'recording-stopped', { error: err.message }); });
       recWriteStream = true;
-      safeSend(mainWindow.webContents, 'recording-log', { msg: `● ${ext.toUpperCase()} recording from stream…` });
+      safeSend(mainWindow.webContents, 'recording-log', { msg: '● MP4 recording (camera)…' });
       return { ok: true };
-    } catch(e) {
+    } catch (e) {
       return { ok: false, error: e.message };
     }
   }
@@ -1568,6 +1769,11 @@ ipcMain.handle('stop-recording', () => {
     if (recMode === 'pcm') {
       // Close stdin — ffmpeg finalizes and fires 'close'
       try { recFfmpegProc.stdin.end(); } catch {}
+    } else if (recMode === 'cam') {
+      // 'q' finishes the MP4 on every OS (a signal on Windows kills ffmpeg before it writes the index).
+      const proc = recFfmpegProc;
+      try { proc.stdin.write('q'); } catch {}
+      setTimeout(() => { if (proc.exitCode === null && proc.signalCode === null) { try { proc.kill('SIGINT'); } catch {} } }, 5000);
     } else {
       // avfoundation mode — send SIGINT for clean file finalization
       try { recFfmpegProc.kill('SIGINT'); } catch {}
@@ -2028,8 +2234,9 @@ function apiRequest(method, path, body, token) {
       let data = '';
       res.on('data', d => { data += d; });
       res.on('end', () => {
-        try { resolve({ status: res.statusCode, body: JSON.parse(data) }); }
-        catch(e) { resolve({ status: res.statusCode, body: { error: data } }); }
+        // `date` is the server's clock: GO LIVE opens by slot time, and a DJ's laptop can be minutes off (1.6.0).
+        try { resolve({ status: res.statusCode, body: JSON.parse(data), date: res.headers.date || null }); }
+        catch(e) { resolve({ status: res.statusCode, body: { error: data }, date: res.headers.date || null }); }
       });
     });
     req.on('error', (e) => reject(e));
