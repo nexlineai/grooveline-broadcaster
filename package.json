@@ -99,7 +99,7 @@
       "notarize": false
     },
     "dmg": {
-      "title": "Grooveline Broadcaster",
+      "title": "Grooveline Broadcaster${arch}",
       "background": "assets/dmg-background.png",
       "window": {
         "width": 540,

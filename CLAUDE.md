@@ -15,6 +15,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   shares. Its `publish` job attaches the dmgs to a **prerelease**; the download page is changed by hand after testing.
 - `--mac dmg` on the CLI builds **only the host arch** unless you pass `--arm64 --x64`. The first CI run made only the
   arm64 dmg because of this.
+- The two dmgs build **in parallel**, and dmg-builder first unmounts any volume with its own name
+  (`/Volumes/<title>`). With one shared title the builds unmounted each other at random (22 Oct: "No such file …
+  .background/dmg-background.png", `hdiutil detach … No such file`). So `dmg.title` is `Grooveline Broadcaster${arch}`:
+  the Intel volume keeps the plain name, the Apple Silicon one is `Grooveline Broadcaster-arm64`.
 - `scripts/mac-deps.sh` fetches the pinned, checksummed `bin/mac` ffmpeg and sox (`bin/` is gitignored).
 
 ## Commands
