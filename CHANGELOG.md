@@ -9,6 +9,7 @@ The app shows the sections newer than the version you had before under "What's n
 - The level meters always show their green, yellow and red zones, and CLIP no longer lights up when the input starts.
 - While a video show is recorded, REC shows it (SHOW and the time), then SAVING… and ✓ SAVED after STOP.
 - Mac video shows: the sound starts together with the picture, and the log reports every 10 s if the Mac can't keep up.
+- New: video check. Stream check › Start video check sends your camera and sound to a private link only you get, with no slot needed and nothing public, for as long as you like. Watch opens it in your browser.
 
 ## 1.6.0
 

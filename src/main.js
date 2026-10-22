@@ -1353,11 +1353,14 @@ ipcMain.handle('start-stream', async (event, opts) => {
   // destination, on a private /check-* mount, audio only — or nothing streams.
   if (opts.soundCheck) {
     const p = activeProfiles[0];
-    if (activeProfiles.length !== 1 || p.type !== 'icecast' || !/^\/check-[a-z0-9-]+$/i.test(p.mount || '')) {
-      return { ok: false, error: 'Stream check refused: it only streams to your private test mount.' };
+    const audioCheck = p.type === 'icecast' && /^\/check-[a-z0-9-]+$/i.test(p.mount || '');
+    // 1.6.1: a video check streams camera + input to the DJ's private video key, never to a booking's key.
+    const videoCheck = p.type === 'mediamtx' && /^rtmp:\/\/46\.224\.177\.15:1935\/live\/vcheck-[0-9a-f]{20}$/.test(rtmpUrlOf(p));
+    if (activeProfiles.length !== 1 || !(audioCheck || videoCheck)) {
+      return { ok: false, error: 'Stream check refused: it only streams to your private test mount or video key.' };
     }
     opts.profiles = [p];
-    opts.audioOnly = true;
+    opts.audioOnly = audioCheck;
   }
 
   isStreaming = true;
@@ -2293,6 +2296,15 @@ ipcMain.handle('api-credentials', async (_, { token, bookingId }) => {
 ipcMain.handle('api-check-mount', async (_, { token }) => {
   return apiRequest('GET', '/check/mount', null, token);
 });
+
+// Video check (1.6.1): is our private video key on air? The video server serves its HLS playlist only while publishing.
+ipcMain.handle('check-video-status', (_, { key }) => new Promise(resolve => {
+  if (!/^vcheck-[0-9a-f]{20}$/.test(String(key))) return resolve({ receiving: false });
+  const https = require('https');
+  const req = https.get(`https://stream.grooveline.org/live/${key}/index.m3u8`, { timeout: 10000 }, res => { res.resume(); resolve({ receiving: res.statusCode === 200 }); });
+  req.on('timeout', () => req.destroy(new Error('timeout')));
+  req.on('error', () => resolve({ receiving: false }));
+}));
 
 ipcMain.handle('api-check-status', async (_, { token }) => {
   return apiRequest('GET', '/check/status', null, token);

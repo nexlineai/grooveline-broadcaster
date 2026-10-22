@@ -265,3 +265,9 @@ See grooveline memory file for full context.
   83 s show). Every 10 s a tech line `[mac video] ffmpeg time=… speed=…x · sox dropped audio N× in the last 10 s`
   replaces one log line per overrun. **Unverified on a Mac.**
 - Not done: an ffmpeg/sox preview meter for inputs only ffmpeg lists on macOS/Windows (most go away with the matcher).
+- **Video check:** Stream check › "Start video check" (shown when a camera is found; no slot needed, so a long test run
+  never books, and so never announces, a slot). `/check/mount` returns `video_key` (`vcheck-` + 20 hex, an HMAC of the user
+  id), `video_rtmp_url` and `video_watch_url` (grooveline.org/watch). The server lists every DJ's key as an always-open
+  rtmp window, and `/live` never sees it: no site switch, no recording, no posts. `start-stream` allows a soundCheck
+  only to `/check-*` (audio) or `rtmp://46.224.177.15:1935/live/vcheck-…` (video). "Received" = `check-video-status`
+  (HLS playlist 200). Tested end to end on 22 Oct with Zé's account: playlist 200, /watch played, `/live` stayed false.

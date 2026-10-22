@@ -329,9 +329,9 @@ details.adv[open] > summary::after { content: '⌄'; }
           <div id="chk-signin" hidden><div class="hint">Sign in above to run a stream check.</div></div>
           <div id="chk-ready" hidden style="display:grid;gap:9px">
             <div class="check-state" id="chk-last">NOT TESTED YET</div>
-            <div class="hint">A private test stream from <b id="chk-input-name">your input</b>. Our server tells you when it hears you, and you can listen back.</div>
+            <div class="hint">A private test stream from <b id="chk-input-name">your input</b>. Our server tells you when it hears you, and you can listen back. The video check sends your camera too, to a private link only you get, for as long as you like: no slot needed, nothing public.</div>
             <div class="err" id="chk-ready-err"></div>
-            <div class="row"><button class="btn teal" id="chk-start-btn" onclick="startAppCheck()">Start stream check</button></div>
+            <div class="row"><button class="btn teal" id="chk-start-btn" onclick="startAppCheck()">Start stream check</button><button class="btn" id="chk-video-btn" onclick="startAppCheck('video')" hidden title="Camera and sound to your private video key. No slot needed, nothing is public, it runs until you press Stop.">Start video check</button></div>
           </div>
           <div id="chk-running" hidden style="display:grid;gap:9px">
             <div class="check-state" id="chk-state">CONNECTING…</div>
@@ -1176,7 +1176,7 @@ function refreshUI() {
   const fb = show.fallback;
   const win = slotWindow(prof ? loadedBooking() : null);
   let word, cls, sub, pill;
-  if (isLive && appCheck) { word = 'STREAM CHECK'; cls = 'warn'; sub = 'Private test mount · nobody hears it'; }
+  if (isLive && appCheck) { word = appCheck.video ? 'VIDEO CHECK' : 'STREAM CHECK'; cls = 'warn'; sub = appCheck.video ? 'Private video key · only you can watch it' : 'Private test mount · nobody hears it'; }
   else if (isLive && reconnect) {
     const left = Math.max(0, Math.ceil(reconnect.delay - (Date.now() - reconnect.at) / 1000));
     word = 'RECONNECTING'; cls = 'warn'; sub = `Retry ${reconnect.attempt} in ${left} s · keep the app open`;
@@ -1289,7 +1289,9 @@ function renderCheck() {
   const last = $('chk-last');
   if (checkPassedAt) { last.className = 'check-state ok'; last.textContent = `✓ PASSED AT ${fmtTime(checkPassedAt)}`; }
   else { last.className = 'check-state'; last.textContent = 'NOT TESTED YET'; }
-  $('chk-start-btn').disabled = isLive;
+  $('chk-start-btn').disabled = isLive || !!inputUnmatched;
+  $('chk-video-btn').hidden = $('video-device').options.length < 2;   // a camera was found
+  $('chk-video-btn').disabled = isLive || !!inputUnmatched;
 }
 
 // ── Navigation ─────────────────────────────────────────────────────
@@ -1955,7 +1957,7 @@ async function stripCheck() {
   openCheckModal();
   if (acctToken && !isLive) startAppCheck();
 }
-async function startAppCheck() {
+async function startAppCheck(kind) {
   if (isLive) { setChkErr('chk-ready-err', 'Stop your stream first.'); return; }
   setChkErr('chk-ready-err', '');
   const btn = $('chk-start-btn');
@@ -1968,13 +1970,19 @@ async function startAppCheck() {
   const d = res.body || {};
   if (res.status !== 200 || !d.mount_point) { setChkErr('chk-ready-err', d.error || "Couldn't prepare your test mount."); return; }
   const host = d.server || 'radio.grooveline.org';
-  const profile = {
-    type: 'icecast', name: 'Stream check (private)', enabled: true,
-    server: String(d.port || '8000') === '8000' ? host : `${host}:${d.port}`,
-    mount: d.mount_point, username: d.username || 'source', password: d.password,
-  };
-  appCheck = { mount: d.mount_point, host, profile, poll: null, received: false, started: Date.now() };
-  setChkState('wait', 'CONNECTING…', 'Starting your input and connecting to our server.');
+  // Video check (1.6.1): on a video slot with a camera, the check sends camera + input to the DJ's private video key
+  // (vcheck-…). It is never a booking: the site never shows it, nothing records it, nothing posts. Runs until Stop.
+  // The video check needs no slot: a long run before a show must not book (and announce) one.
+  const videoCheck = kind === 'video' && $('video-device').options.length > 1;
+  if (videoCheck && !/^vcheck-[0-9a-f]{20}$/.test(d.video_key || '')) { setChkErr('chk-ready-err', "The video check isn't available right now."); return; }
+  const profile = videoCheck
+    ? { type: 'mediamtx', name: 'Video check (private)', enabled: true, streamKey: d.video_key, rtmpUrl: d.video_rtmp_url }
+    : { type: 'icecast', name: 'Stream check (private)', enabled: true,
+        server: String(d.port || '8000') === '8000' ? host : `${host}:${d.port}`,
+        mount: d.mount_point, username: d.username || 'source', password: d.password };
+  appCheck = { mount: d.mount_point, host, profile, poll: null, received: false, started: Date.now(),
+    video: videoCheck ? { key: d.video_key, watch: d.video_watch_url } : null };
+  setChkState('wait', 'CONNECTING…', videoCheck ? 'Starting your camera and input, and connecting to our video server. Private: only you can watch it.' : 'Starting your input and connecting to our server.');
   refreshUI();
   await toggleLive(null, profile);
   if (!appCheck) return;            // stopped meanwhile
@@ -1989,6 +1997,23 @@ async function startAppCheck() {
 async function pollAppCheck() {
   const c = appCheck;
   if (!c) return;
+  if (c.video) {
+    // Received = the video server serves this key's HLS playlist (only while our stream is publishing).
+    let ok = false;
+    try { ok = !!(await window.grooveline.checkVideoStatus({ key: c.video.key })).receiving; } catch {}
+    if (appCheck !== c) return;
+    if (ok) {
+      setChkState('on', '✓ OUR SERVER SEES YOU', 'Your camera and sound reach Grooveline. Press Watch to see exactly what we receive (in your browser, about 10 s behind). It runs until you press Stop.');
+      $('chk-listen-btn').textContent = '▶ Watch'; $('chk-listen-wrap').hidden = false;
+      if (!c.received) { c.received = true; checkPassedAt = new Date(); addLog('Video check: our server sees you.', 'success'); refreshUI(); }
+    } else {
+      $('chk-listen-wrap').hidden = true;
+      const secs = Math.round((Date.now() - c.started) / 1000);
+      setChkState('wait', 'WAITING FOR YOUR VIDEO…', secs < 60 ? 'The first time, your private video key needs a few seconds to be ready. The app keeps trying by itself.'
+        : `Still nothing after ${secs} s. Check the camera preview and the meters. The log shows what the app is doing.`);
+    }
+    return;
+  }
   let res;
   try { res = await window.grooveline.apiCheckStatus({ token: acctToken }); } catch { return; }
   if (appCheck !== c) return;
@@ -2019,6 +2044,7 @@ async function endAppCheck(stopStream) {
   refreshUI();
 }
 function toggleAppCheckListen() {
+  if (appCheck && appCheck.video) { openExt(appCheck.video.watch); return; } // video check: watch it in the browser
   const a = $('chk-audio');
   if (a.getAttribute('src')) { stopAppCheckListen(); return; }
   if (!appCheck) return;

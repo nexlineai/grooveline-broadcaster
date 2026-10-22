@@ -60,6 +60,7 @@ contextBridge.exposeInMainWorld('grooveline', {
   apiCredentials: (opts) => ipcRenderer.invoke('api-credentials', opts),
   apiCheckMount: (opts) => ipcRenderer.invoke('api-check-mount', opts),
   apiCheckStatus: (opts) => ipcRenderer.invoke('api-check-status', opts),
+  checkVideoStatus: (opts) => ipcRenderer.invoke('check-video-status', opts),
 
   // 1.5.0: build info, log file, changelog, update check, live level meters
   getAppInfo: () => ipcRenderer.invoke('get-app-info'),
