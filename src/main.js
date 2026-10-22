@@ -670,6 +670,9 @@ const VIDEO_RETRY_DELAYS_S = [5, 10, 20, 30];
 // answer is no. ffmpeg only sees "Connection reset by peer", so a reset this soon after launch counts as a refusal.
 const RTMP_REFUSED_MS = 12000;
 const RTMP_CONFIRM_MS = 5000;  // sending this long on RTMP = past the key check → ON AIR / "Connected"
+// What a refusal looks like: the server cut off a stream that was already sending. Connect errors (DNS, unreachable,
+// refused, timed out) are the network, and so is any drop once the show has been on air: those keep retrying.
+const RTMP_CUT_LINE = /Connection reset|Broken pipe|End of file|Error writing trailer|Slave muxer/i;
 const STAGE_TEXT = {
   refused: "Grooveline's video server refused the stream: the slot isn't open for streaming (from 15 minutes before it starts until it ends), or the stream key is out of date",
   auth: 'the server refused the password (a new mount can take up to a minute to be ready)',
@@ -747,7 +750,7 @@ function superviseLine(proc, line) {
     s.lastProgress = Date.now();
     if (!s.firstProgressAt) s.firstProgressAt = s.lastProgress;
     const first = !s.confirmed && progressConfirmed(s);
-    if (first) s.confirmed = true;
+    if (first) { s.confirmed = true; s.everConfirmed = true; }
     if (first && s.uiReconnecting) {
       s.uiReconnecting = false;
       const secs = s.outageStart ? Math.round((Date.now() - s.outageStart) / 1000) : null;
@@ -796,7 +799,8 @@ function scheduleRestart(why) {
   videoFfmpegProc = null; videoSoxProc = null;
 
   let stage = s.stage || (s.lastProgress ? 'network' : 'stalled');
-  if (stage === 'network' && isVideoSession(s) && !s.confirmed && Date.now() - s.launchedAt < RTMP_REFUSED_MS) stage = 'refused';
+  if (stage === 'network' && isVideoSession(s) && !s.everConfirmed && s.firstProgressAt && Date.now() - s.launchedAt < RTMP_REFUSED_MS
+    && RTMP_CUT_LINE.test(s.lastLine || '')) stage = 'refused';
   const toRadio = stage === 'camera' && fallBackToRadio(s.sender, s.opts, 'The camera failed');
   s.sameStageFails = toRadio ? 0 : stage === s.prevStage ? s.sameStageFails + 1 : 1;
   s.prevStage = toRadio ? null : stage;

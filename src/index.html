@@ -1884,7 +1884,7 @@ async function acctLoadCredentialsFromBooking(booking, opts = {}) {
     const changed = updateAudioOnly();
     saveCfg();
     if (changed) await startPreview();
-    if (!opts.goLive) showLoadMsg('success', isVideoSlot ? '✓ Video slot loaded. Without a camera, your audio goes to the radio by itself.' : '✓ Radio slot loaded.');
+    if (!opts.goLive && !opts.quiet) showLoadMsg('success', isVideoSlot ? '✓ Video slot loaded. Without a camera, your audio goes to the radio by itself.' : '✓ Radio slot loaded.');
     if (!opts.quiet || cfg._lastLoadedLog !== booking.id) { addLog(`Slot loaded: ${isVideoSlot ? 'Grooveline Video' : 'Grooveline Radio ' + profile.mount}, ${day} ${fmtTime(new Date(booking.start_time))}`, 'success'); cfg._lastLoadedLog = booking.id; }
   } catch(e) { showLoadMsg('error', 'No connection to grooveline.org: ' + e.message); }
   refreshUI();
