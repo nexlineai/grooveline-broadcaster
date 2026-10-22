@@ -168,6 +168,17 @@ from `GET /check/status` (our Icecast), polled every 3 s, never from ffmpeg.
 - **Window:** macOS `hiddenInset`, Windows `titleBarOverlay`, Linux native frame with no menu bar. The session
   permission handler must allow `fullscreen`, or the camera preview's double-click full screen is refused silently.
 
+### 1.5.1 (22 Oct 2026)
+- **Quit closes the camera first:** the window `close` handler and `force-quit` call `releaseDevices()`. It sends
+  `release-devices` (the page stops its preview and canvas capture), then on Linux waits until no process in our tree
+  holds a `/dev/videoN` (`videoHolders()`, max 2.5 s). Background: on 22 Oct, with the preview open, a plain close killed
+  Chromium's capture process mid-stream, and facetimehd logged `IO: timeout` plus ~2,800 DMA faults; a stopped track
+  or a SIGTERM'd ffmpeg logs nothing. `kill -9` of the app while live is fine: ffmpeg exits when its meter-tap pipe
+  breaks.
+- **What's new** lists every CHANGELOG section after `lastSeenVersion` (missing = 1.4.0), so 1.4 → 1.5.1 also shows 1.5.0.
+- **Linux cameras Chromium can't see:** facetimehd master (PR #331) reports frame sizes as a STEPWISE range, and
+  Chromium lists no camera then. The dropdown still shows it (from sysfs) and GO LIVE streams it via ffmpeg.
+
 ## Historical: video streaming blocker (2026-04-09)
 This is about the macOS canvas path and predates the supervisor; re-check before relying on it.
 

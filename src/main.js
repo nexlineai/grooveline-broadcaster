@@ -427,11 +427,64 @@ function createWindow() {
     mainWindow.webContents.openDevTools({ mode: 'detach' });
   }
 
+  let devicesReleased = false;
   mainWindow.on('close', (e) => {
     if (isStreaming) {
       e.preventDefault();
       mainWindow.webContents.send('confirm-close');
+      return;
     }
+    // Stop the camera preview before the window (and Chromium's capture process) goes.
+    if (devicesReleased) return;
+    e.preventDefault();
+    releaseDevices().then(() => {
+      devicesReleased = true;
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.close();
+      if (quitRequested) app.quit();
+    });
+  });
+}
+
+// Close the camera cleanly before the app exits. Killing Chromium's capture process mid-stream (closing the app with
+// the preview open) made facetimehd log an IO timeout and ~2,800 DMA faults (22 Oct 2026). A stopped track or a
+// SIGTERM'd ffmpeg stops the stream first and logged nothing.
+let quitRequested = false;
+
+// Linux: the pids in our process tree (Chromium's helpers, ffmpeg) that have a /dev/videoN open.
+function videoHolders() {
+  const tree = new Set([process.pid]), procs = [];
+  try {
+    for (const n of fs.readdirSync('/proc')) {
+      if (!/^\d+$/.test(n)) continue;
+      try { const st = fs.readFileSync(`/proc/${n}/stat`, 'utf8'); procs.push([+n, +st.slice(st.lastIndexOf(')') + 2).split(' ')[1]]); } catch {}
+    }
+  } catch { return []; }
+  for (let grew = true; grew;) { grew = false; for (const [pid, ppid] of procs) if (!tree.has(pid) && tree.has(ppid)) { tree.add(pid); grew = true; } }
+  return [...tree].filter(pid => {
+    try { return fs.readdirSync(`/proc/${pid}/fd`).some(fd => { try { return /^\/dev\/video\d+$/.test(fs.readlinkSync(`/proc/${pid}/fd/${fd}`)); } catch { return false; } }); }
+    catch { return false; }
+  });
+}
+
+// Asks the page to stop its camera/mic tracks, then waits until nothing of ours holds a camera (Linux, max 2.5 s;
+// elsewhere a short pause).
+function releaseDevices() {
+  return new Promise(resolve => {
+    let settled = false;
+    const settle = () => {
+      if (settled) return;
+      settled = true;
+      ipcMain.removeAllListeners('devices-released');
+      if (process.platform !== 'linux') return setTimeout(resolve, 300);
+      const t0 = Date.now();
+      const poll = () => (!videoHolders().length || Date.now() - t0 > 2500) ? resolve() : setTimeout(poll, 100);
+      poll();
+    };
+    const wc = mainWindow && !mainWindow.isDestroyed() ? mainWindow.webContents : null;
+    if (!wc) return settle();
+    ipcMain.once('devices-released', settle);
+    setTimeout(settle, 1500);
+    wc.send('release-devices');
   });
 }
 
@@ -482,6 +535,7 @@ app.whenReady().then(() => {
 });
 
 app.on('before-quit', () => {
+  quitRequested = true;
   // Kill all child processes before window is destroyed — prevents "Object has been destroyed" crash
   pcmProcesses.forEach(p => { try { p.kill('SIGKILL'); } catch {} });
   pcmProcesses = [];
@@ -1862,8 +1916,9 @@ ipcMain.handle('get-home-dir', () => {
   return os.homedir();
 });
 
-ipcMain.handle('force-quit', () => {
+ipcMain.handle('force-quit', async () => {
   stopAllStreams();
+  await releaseDevices(); // also waits for the SIGTERM'd ffmpeg to let go of the camera
   app.exit(0);
 });
 

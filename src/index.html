@@ -565,6 +565,7 @@ let checkPassedAt = null, lastSignalAt = 0, lastBitrate = null;
 let appCheck = null; // running stream check: { mount, host, profile, poll, received, started }
 let previewStream = null, audioCtx = null, gainNode = null, previewPairMissing = false;
 let previewAnalysers = null;     // [analyserL, analyserR] on the picked pair, after the volume
+let closing = false;             // the app is quitting: no new preview
 let previewTapOn = false;        // Linux: the preview levels come from an ffmpeg meter on the exact source (main.js)
 let previewNoLevel = false;      // Windows/macOS: the input is one only ffmpeg lists; Chromium can't meter it
 let platform = '', appInfo = null, changelog = '', updateInfo = null, whatsNewOpen = false;
@@ -639,6 +640,8 @@ function bindStreamEvents() {
   window.grooveline.onStreamReconnected(() => { reconnect = null; onAir = true; refreshUI(); });
   window.grooveline.onStreamFallback(() => { liveOnRadioFallback = true; refreshUI(); });
   window.grooveline.onConfirmClose(() => $('overlay').classList.add('show'));
+  // Quitting: stop the camera here, so it closes cleanly (main.js waits for it before the window goes).
+  window.grooveline.onReleaseDevices(() => { closing = true; try { teardown(); stopCanvasCapture(); } catch(e) {} window.grooveline.devicesReleased(); });
   window.grooveline.onMeter(m => { tap = { ...m, at: performance.now() }; });
 }
 
@@ -953,7 +956,7 @@ async function startCanvasCapture(videoDeviceId, quality) {
 // and, on a video slot, the camera preview. GO LIVE stops it first, so the device is never opened twice.
 async function startPreview() {
   teardown();
-  if (isLive) return false;
+  if (isLive || closing) return false;
   const audioId = $('audio-device').value, videoId = $('video-device').value;
   const effectiveAudioId = audioId.startsWith('ffmpeg:') ? '' : audioId;
   const effectiveVideoId = (!videoId || videoId.startsWith('ffmpeg-video:')) ? '' : videoId;
@@ -982,7 +985,7 @@ async function startPreview() {
     addLog('Preview failed: ' + (e.name === 'NotFoundError' ? 'input not found' : e.name === 'NotAllowedError' ? 'permission denied' : e.message), 'warn');
     return false;
   }
-  if (isLive) { teardown(); return false; } // GO LIVE was pressed meanwhile
+  if (isLive || closing) { teardown(); return false; } // GO LIVE or quit was pressed meanwhile
   if (!cfg.audioOnly && previewStream.getVideoTracks().length) {
     const v = $('preview-video'); v.srcObject = previewStream; v.style.display = 'block'; $('preview-ph').style.display = 'none';
   } else if (!cfg.audioOnly) $('preview-ph').textContent = 'No camera found';
@@ -1498,9 +1501,16 @@ async function initWhatsNew() {
   if (upgraded) whatsNewOpen = true;
   else if (!cfg.lastSeenVersion) { cfg.lastSeenVersion = v; saveCfg(); }
 }
+const verCmp = (a, b) => { const x = String(a).split('.').map(Number), y = String(b).split('.').map(Number);
+  for (let i = 0; i < 3; i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) - (y[i] || 0); return 0; };
+// Every section after the version this computer last ran, newest first: 1.4.0 → 1.5.1 also shows 1.5.0's notes.
+// Before 1.5.0 there was no lastSeenVersion.
 function whatsNewItems() {
-  const v = appInfo && appInfo.version, m = changelog.split(/^## /m).find(s => s.startsWith(v + '\n') || s.startsWith(v + '\r'));
-  return m ? m.split('\n').filter(l => /^- /.test(l)).map(l => l.slice(2)) : [];
+  const v = appInfo && appInfo.version, from = cfg.lastSeenVersion || '1.4.0';
+  return changelog.split(/^## /m).slice(1).filter(sec => {
+    const sv = sec.split(/\r?\n/)[0].trim();
+    return /^\d+\.\d+\.\d+$/.test(sv) && verCmp(sv, from) > 0 && verCmp(sv, v) <= 0;
+  }).flatMap(sec => sec.split('\n').filter(l => /^- /.test(l)).map(l => l.slice(2).trim()));
 }
 function whatsNewHtml() {
   const items = whatsNewItems();

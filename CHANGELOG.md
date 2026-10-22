@@ -1,6 +1,10 @@
 # Changelog
 
-The app shows the section for its own version under "What's new" the first time it opens.
+The app shows the sections newer than the version you had before under "What's new" the first time it opens.
+
+## 1.5.1
+
+- Quitting the app now stops the camera cleanly first. On some Linux laptops a camera cut off mid-stream could stop working until a restart.
 
 ## 1.5.0
 

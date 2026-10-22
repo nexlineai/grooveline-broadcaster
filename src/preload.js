@@ -22,6 +22,8 @@ contextBridge.exposeInMainWorld('grooveline', {
   onStreamReconnected: (cb) => ipcRenderer.on('stream-reconnected', (_, data) => cb(data)),
   onStreamFallback: (cb) => ipcRenderer.on('stream-fallback', (_, data) => cb(data)),
   onConfirmClose: (cb) => ipcRenderer.on('confirm-close', (_, data) => cb(data)),
+  onReleaseDevices: (cb) => ipcRenderer.on('release-devices', () => cb()),
+  devicesReleased: () => ipcRenderer.send('devices-released'),
 
   removeAllListeners: (channel) => ipcRenderer.removeAllListeners(channel),
 
