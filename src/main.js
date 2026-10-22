@@ -1197,30 +1197,12 @@ function startVideoStream(event, ffmpeg, profiles, quality, audioDeviceName, vol
     '-t', 'raw', '-r', String(sampleRate), '-e', 'signed', '-b', '16', '-c', String(soxChannels), '-'
   ];
 
-  safeSend(event.sender, 'stream-log', { type: 'info', msg: `Starting sox — device: "${audioDeviceName}"`, tech: true });
   safeSend(event.sender, 'stream-log', { type: 'info', msg: `CMD: ffmpeg ${args.join(' ')}`, tech: true });
 
-  // Spawn sox first
-  const soxProc = spawn(sox, soxArgs);
-  videoSoxProc = soxProc;
-  activeProcesses.push(soxProc);
-
-  soxProc.stderr.on('data', d => {
-    const line = d.toString().trim();
-    if (line) safeSend(event.sender, 'stream-log', { type: 'info', msg: `[sox] ${line}`, tech: true });
-  });
-  soxProc.on('error', e => safeSend(event.sender, 'stream-log', { type: 'error', msg: `[sox] ${e.message}`, tech: true }));
-  soxProc.on('close', (code) => {
-    const idx = activeProcesses.indexOf(soxProc);
-    if (idx > -1) activeProcesses.splice(idx, 1);
-    if (videoSoxProc === soxProc) videoSoxProc = null;
-    if (isStreaming) {
-      safeSend(event.sender, 'stream-log', { type: 'error', msg: `[sox] Exited (code ${code}) — audio device "${audioDeviceName}" may not be available.` });
-      try { if (videoFfmpegProc) videoFfmpegProc.kill('SIGTERM'); } catch {}
-    }
-  });
-
-  // Spawn ffmpeg with stdin (video) + fd3 (audio from sox)
+  // 1.6.1 (Mac test, 22 Oct): sox used to start first, while ffmpeg still probed the camera's webm (about 6 s). The
+  // pipe filled, CoreAudio dropped audio ("unhandled buffer overrun", 1012 times in one live minute), and the show
+  // file came out short. Now ffmpeg starts first and sox only once ffmpeg has opened its video input ("Input #0").
+  // Every 10 s one tech line says how fast ffmpeg runs and how often sox dropped audio, so a slow Mac shows itself.
   let cmd = ffmpeg, spawnArgs = args;
   if (process.platform !== 'win32') {
     cmd = 'nice';
@@ -1230,15 +1212,50 @@ function startVideoStream(event, ffmpeg, profiles, quality, audioDeviceName, vol
   const proc = spawn(cmd, spawnArgs, { stdio: ['pipe', 'pipe', 'pipe', 'pipe'] });
   videoFfmpegProc = proc;
   activeProcesses.push(proc);
-
-  // Pipe sox stdout → ffmpeg fd3
-  soxProc.stdout.pipe(proc.stdio[3]);
   attachMeterTap(proc, event.sender);
+  proc.stdio[3].on('error', () => {});
+
+  let soxProc = null, overruns = 0, lastProgress = '';
+  const startSox = () => {
+    if (soxProc || proc.exitCode !== null) return;
+    safeSend(event.sender, 'stream-log', { type: 'info', msg: `Starting sox — device: "${audioDeviceName}"`, tech: true });
+    soxProc = spawn(sox, soxArgs);
+    videoSoxProc = soxProc;
+    activeProcesses.push(soxProc);
+    soxProc.stderr.on('data', d => {
+      d.toString().split('\n').map(l => l.trim()).filter(Boolean).forEach(line => {
+        if (/buffer overrun/i.test(line)) { overruns++; return; } // counted, reported every 10 s
+        safeSend(event.sender, 'stream-log', { type: 'info', msg: `[sox] ${line}`, tech: true });
+      });
+    });
+    soxProc.on('error', e => safeSend(event.sender, 'stream-log', { type: 'error', msg: `[sox] ${e.message}`, tech: true }));
+    soxProc.on('close', (code) => {
+      const idx = activeProcesses.indexOf(soxProc);
+      if (idx > -1) activeProcesses.splice(idx, 1);
+      if (videoSoxProc === soxProc) videoSoxProc = null;
+      if (isStreaming) {
+        safeSend(event.sender, 'stream-log', { type: 'error', msg: `[sox] Exited (code ${code}) — audio device "${audioDeviceName}" may not be available.` });
+        try { if (videoFfmpegProc) videoFfmpegProc.kill('SIGTERM'); } catch {}
+      }
+    });
+    soxProc.stdout.pipe(proc.stdio[3]);
+  };
+  const soxFallback = setTimeout(startSox, 15000); // ffmpeg never said "Input #0": start anyway, the log shows why
+  const health = setInterval(() => {
+    if (proc.exitCode !== null) return;
+    const t = (lastProgress.match(/time=\s*(\S+)/) || [])[1], sp = (lastProgress.match(/speed=\s*(\S+)/) || [])[1];
+    safeSend(event.sender, 'stream-log', { type: overruns ? 'warn' : 'info', tech: true,
+      msg: `[mac video] ffmpeg time=${t || '?'} speed=${sp || '?'} · sox dropped audio ${overruns}× in the last 10 s` });
+    overruns = 0;
+  }, 10000);
+  proc.on('close', () => { clearTimeout(soxFallback); clearInterval(health); });
 
   proc.stderr.on('data', (data) => {
-    const lines = data.toString().split('\n').filter(l => l.trim());
+    const lines = data.toString().split(/[\r\n]+/).filter(l => l.trim());
     lines.forEach(line => {
+      if (/^Input #0/.test(line.trim())) { clearTimeout(soxFallback); startSox(); }
       if (line.includes('size=') || line.includes('time=')) {
+        lastProgress = line;
         const match = line.match(/bitrate=\s*([\d.]+)kbits/);
         safeSend(event.sender, 'stream-stats', { bitrate: match ? match[1] : null });
       } else if (line.match(/error|Error|failed|Broken pipe/i) && !line.includes('Qavg')) {
@@ -1365,11 +1382,12 @@ ipcMain.handle('start-stream', async (event, opts) => {
     opts._dshowCams = videoDevices;
     // DirectShow has no device called "default" — pick the first real input
     // rather than fail with "Error opening input file audio=default".
-    if (needAudioName && devices.length) {
-      opts.audioDeviceName = devices[0].name;
-      safeSend(event.sender, 'stream-log', { type: 'warn', msg: `No input resolved — using "${devices[0].name}". Pick your input in SOURCES to change it.` });
-    } else if (needAudioName) {
-      safeSend(event.sender, 'stream-log', { type: 'error', msg: 'No audio inputs found by ffmpeg (DirectShow). Plug in your controller / interface, then press GO LIVE again.' });
+    // 1.6.1: never stream the first input in the list when the picked one wasn't found. On a Mac that silently sent
+    // a loopback driver (silence) for a whole show; DirectShow has the same trap.
+    if (needAudioName) {
+      endLiveSession(); isStreaming = false;
+      return { ok: false, error: devices.length ? 'Pick your input under YOUR INPUT: the app could not tell which device it is.'
+        : 'No audio inputs found (DirectShow). Plug in your controller or interface, then press GO LIVE again.' };
     }
   }
   const r = launchPipeline(event, opts);
@@ -1414,7 +1432,7 @@ function launchPipeline(event, opts) {
   // These do NOT conflict — sox uses CoreAudio API, canvas pipe uses stdin.
   if (process.platform === 'darwin') {
     let launched = 0;
-    const devName = audioDeviceName || '';
+    const devName = audioDeviceName || 'default'; // sox: "default" = CoreAudio's default input; "" opens nothing
     const iceProfiles = activeProfiles.filter(p => p.type === 'icecast' || p.type === 'shoutcast');
     const rtmpProfiles = activeProfiles.filter(p => p.type !== 'icecast' && p.type !== 'shoutcast');
 

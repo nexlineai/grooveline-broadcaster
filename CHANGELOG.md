@@ -2,6 +2,14 @@
 
 The app shows the sections newer than the version you had before under "What's new" the first time it opens.
 
+## 1.6.1
+
+- Mac: "Default input" now streams your Mac's default input. 1.6.0 could pick another device (a silent loopback driver) while the preview looked fine.
+- The app finds your input by name more reliably, and if it can't, it says so and waits before GO LIVE instead of streaming a different device.
+- The level meters always show their green, yellow and red zones, and CLIP no longer lights up when the input starts.
+- While a video show is recorded, REC shows it (SHOW and the time), then SAVING… and ✓ SAVED after STOP.
+- Mac video shows: the sound starts together with the picture, and the log reports every 10 s if the Mac can't keep up.
+
 ## 1.6.0
 
 - Your slot is your destination. Sign in and the app loads it; there is nothing to enter by hand any more, and destinations entered by hand before are removed.

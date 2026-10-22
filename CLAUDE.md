@@ -248,3 +248,20 @@ See grooveline memory file for full context.
 - **Tests** (`~/.local/share/gl-testing/`): `gl-slot-mock.mjs` (signed-in DJ + slot, booking API mocked in main, local
   fakes, server-clock shift), `bc-160-scenarios.mjs` (no camera, through `nocam-exe.sh`), `bc-160-checks.mjs` (levels,
   REC, log), `bc-160-video.mjs` (REAL camera, tell Zé first; local RTMP sinks :19935 accepting, :19936 dropping after 2 s).
+
+### 1.6.1 (22 Oct 2026, from the Mac test on the Samsung-stick handoff)
+- **Input matching:** `findFfDevice` adds a word match after exact and substring. macOS names the mic "Internal
+  Microphone (Built-in)" in Chromium and "Built-in Microphone" in CoreAudio/ffmpeg. The shorter name's words must all be
+  in the longer one (2+ words), and the closest pair wins. On macOS the default option falls back to sox's `default`
+  keyword (sox `coreaudio.c`: `strncmp(name, "default", 7)` = CoreAudio's default input; an empty name opens nothing).
+  **Never `devices[0]`:** 1.6.0 streamed Soundflower (silence) for a whole Mac show. An unmatched input sets
+  `inputUnmatched` and blocks GO LIVE and the Stream check. Windows `start-stream` refuses instead of taking the first
+  dshow input. The `Input:` log line names the device that streams when it differs from the label.
+- **Meters:** `.bar .mask` is 86 % opaque, so the zones always show faintly. A new meter source (preview, tap, live)
+  shows silence for 600 ms and resets CLIP and peak hold: a stray first sample latched CLIP on the Mac.
+- **REC while a video show records:** "● SHOW hh:mm:ss", then SAVING… after STOP, and ✓ SAVED for 4 s on `recording-stopped`.
+- **Mac video path:** ffmpeg starts first and sox once ffmpeg prints `Input #0` (15 s fallback). Before, sox filled
+  the pipe during the ~6 s webm probe and CoreAudio dropped audio (1012 overruns in a minute; the MP4 was 52 s for an
+  83 s show). Every 10 s a tech line `[mac video] ffmpeg time=… speed=…x · sox dropped audio N× in the last 10 s`
+  replaces one log line per overrun. **Unverified on a Mac.**
+- Not done: an ffmpeg/sox preview meter for inputs only ffmpeg lists on macOS/Windows (most go away with the matcher).

@@ -161,7 +161,7 @@ select:disabled { opacity: .6; cursor: not-allowed; }
 .bar { position: relative; width: 22px; height: 100%; border-radius: 2px; overflow: hidden; background: #0a0a14; border: 1px solid rgba(0,212,200,.10); }
 .bar .lit { position: absolute; inset: 0; }
 .bar .pk { opacity: .45; }
-.bar .mask { position: absolute; left: 0; right: 0; top: 0; height: 100%; background: #0a0a14; }
+.bar .mask { position: absolute; left: 0; right: 0; top: 0; height: 100%; background: rgba(10,10,20,.86); } /* the zones show faintly above the level (1.6.1) */
 .bar .seg { position: absolute; inset: 0; background: repeating-linear-gradient(to top, transparent 0 3px, rgba(5,5,8,.85) 3px 4px); }
 .bar .hold { position: absolute; left: 0; right: 0; height: 2px; background: #fff; opacity: .9; display: none; }
 .pkv { font: 11px/1 var(--f-mono); color: var(--muted); font-variant-numeric: tabular-nums; }
@@ -537,6 +537,7 @@ const GL_TYPES = PLATFORMS.map(t => t.type);
 let cfg = { profiles:[], audioDevice:'', videoDevice:'', audioOnly:true,
   quality:{ audioBitrate:'192k', videoBitrate:'1000k', videoSize:'1280x720', fps:30, nativeSampleRate:44100 }, volume:100 };
 let isLive = false, liveSeconds = 0, liveTimer = null, liveShowIsVideo = false;
+let inputUnmatched = '';         // the picked input has no device the stream can open (1.6.1): GO LIVE and Stream check wait
 let liveOnRadioFallback = false; // a video show that is streaming to the radio (no camera)
 let onAir = false;               // live and ffmpeg is sending (first progress line)
 let reconnect = null;            // { attempt, delay, stage, message, at } while the supervisor retries
@@ -719,10 +720,26 @@ const normDev = s => String(s || '').replace(/\s*\([0-9a-f]{4}:[0-9a-f]{4}\)/gi,
 const devMatches = (a, b) => { a = normDev(a); b = normDev(b); return !!a && !!b && (a === b || a.includes(b) || b.includes(a)); };
 // The ffmpeg device behind a browser label: exact names first, then partial. A PipeWire monitor only matches a label
 // that says "monitor": "Built-in Audio Analog Stereo" (the mic) is a substring of its own "Monitor of …".
+// Words of a device name, without USB ids and "default".
+const devWords = s => String(s || '').toLowerCase().replace(/\s*\([0-9a-f]{4}:[0-9a-f]{4}\)/g, '').split(/[^a-z0-9]+/).filter(w => w && w !== 'default');
 function findFfDevice(label, list) {
   const n = normDev(label), cands = list.filter(d => !d.monitor || /monitor/i.test(label));
-  return cands.find(d => normDev(d.description) === n || normDev(d.name) === n)
-    || cands.find(d => devMatches(d.description || d.name, label) || devMatches(d.name, label)) || null;
+  const hit = cands.find(d => normDev(d.description) === n || normDev(d.name) === n)
+    || cands.find(d => devMatches(d.description || d.name, label) || devMatches(d.name, label));
+  if (hit) return hit;
+  // Same device, words in another order (1.6.1): macOS names the mic "Internal Microphone (Built-in)" in Chromium and
+  // "Built-in Microphone" in CoreAudio/ffmpeg. Every word of the shorter name must be in the longer one (2 words at
+  // least); the closest pair wins. 1.6.0 found no match and streamed the first device in the list (Soundflower).
+  const lw = devWords(label);
+  let best = null, bestScore = 0;
+  for (const d of cands) {
+    const dw = devWords(d.description || d.name);
+    const [a, b] = lw.length <= dw.length ? [lw, dw] : [dw, lw];
+    if (a.length < 2 || !a.every(w => b.includes(w))) continue;
+    const score = a.length / b.length;
+    if (score > bestScore) { best = d; bestScore = score; }
+  }
+  return best;
 }
 
 async function populateDevices() {
@@ -805,9 +822,11 @@ async function populateDevices() {
       });
       // The default option: Linux streams PipeWire's default source; elsewhere it is tied to the system default's name.
       if (platform === 'linux') asel.options[0].dataset.ffmpegName = 'default';
-      else if (defaultInputLabel) {
-        const dm = ffDevices.find(d => devMatches(ffLabel(d), defaultInputLabel));
+      else {
+        const dm = defaultInputLabel ? findFfDevice(defaultInputLabel, ffDevices) : null;
         if (dm) { asel.options[0].dataset.ffmpegIndex = dm.index; asel.options[0].dataset.ffmpegName = dm.name; }
+        // macOS: sox opens CoreAudio's default input with the keyword "default" (sox coreaudio.c, strncmp "default").
+        else if (platform === 'darwin') asel.options[0].dataset.ffmpegName = 'default';
       }
       if (defaultInputLabel) asel.options[0].textContent = `Default input (${defaultInputLabel})`;
       // ffmpeg devices no browser entry matched (Linux monitors, loopback drivers…)
@@ -853,16 +872,22 @@ async function probeAndBuildChannelPicker() {
       name = match ? match.name : 'default';
       if (!match && opt && opt.value) addLog(`Couldn't match "${label}" to a PipeWire/Pulse source. Streaming the system's default input.`, 'warn');
       cfg.audioDeviceIndex = name;
+    } else if (match) {
+      name = match.name; cfg.audioDeviceIndex = match.index;
+    } else if (platform === 'darwin' && opt && opt.dataset.ffmpegName === 'default') {
+      name = 'default'; cfg.audioDeviceIndex = 'default'; // CoreAudio's default input, opened by sox
     } else {
-      if (!match) match = devices[0];
-      name = match ? match.name : '';
-      cfg.audioDeviceIndex = match ? match.index : 0;
+      // 1.6.0 took devices[0] here: on a Mac that was Soundflower, a silent loopback, and the whole show went out
+      // silent while the preview (Chromium's own mic) looked fine (22 Oct). Now nothing streams until it is fixed.
+      name = ''; cfg.audioDeviceIndex = undefined;
     }
+    inputUnmatched = name ? '' : label.replace(/ ↺$/, '');
+    if (inputUnmatched) addLog(`Can't find "${inputUnmatched}" among the inputs the stream can use. Pick it again, or pick another input. GO LIVE and Stream check wait until then.`, 'error');
     cfg.audioDeviceName = name;
     const result = await window.grooveline.probeAudioChannels({ deviceIndex: cfg.audioDeviceIndex, deviceName: name || 'default' });
     channelCount = result.channels || (match && match.channels) || 2;
     if (result.nativeSampleRate) { cfg.quality.nativeSampleRate = result.nativeSampleRate; setSampleRateOption(result.nativeSampleRate); }
-    addLog(`Input: ${label.replace(/ ↺$/, '')} · ${channelCount} channels · ${((result.nativeSampleRate || 44100) / 1000).toFixed(1)} kHz`, 'info');
+    if (!inputUnmatched) addLog(`Input: ${label.replace(/ ↺$/, '')} · ${channelCount} channels · ${((result.nativeSampleRate || 44100) / 1000).toFixed(1)} kHz${name && !label.includes(name) ? ` (streams "${name === 'default' ? 'the system default input' : name}")` : ''}`, 'info');
   } catch(e) { addLog('Channel probe failed, using 2 channels', 'warn', { tech: true }); }
 
   sel.innerHTML = '';
@@ -1039,7 +1064,7 @@ const iec = db => db < -70 ? 0 : db < -60 ? (db + 70) * .25 : db < -50 ? (db + 6
 const mpos = db => Math.max(0, (iec(db) - 2.5) / 97.5);
 const meterCh = [{ k: 'L', pk: -120, rms: -120, hold: -120, holdT: 0, clip: false }, { k: 'R', pk: -120, rms: -120, hold: -120, holdT: 0, clip: false }];
 const pvBuf = new Float32Array(2048);
-let lastMeterT = 0;
+let lastMeterT = 0, meterSrcKind = null, meterSettleUntil = 0;
 
 function buildScale() {
   const scale = $('scale');
@@ -1071,6 +1096,11 @@ function meterFrame(now) {
     if (tap && tap.kind === want && now - tap.at < 400) src = [{ pk: tap.pL + g, rms: tap.rL + g }, { pk: tap.pR + g, rms: tap.rR + g }];
   }
   else src = readPreview();
+  // A new source (preview starts, input changes, GO LIVE) opens with a stray sample now and then, which latched CLIP
+  // at start-up on a Mac (22 Oct). Show silence for 600 ms after a change, and start CLIP and peak hold from zero.
+  const kind = isLive ? 'live' : previewTapOn ? 'tap' : previewAnalysers ? previewAnalysers[0] : null;
+  if (kind !== meterSrcKind) { meterSrcKind = kind; meterSettleUntil = now + 600; meterCh.forEach(c => { c.clip = false; c.hold = -120; c.pk = -120; }); }
+  if (now < meterSettleUntil) src = null;
   meterCh.forEach((c, i) => {
     const s = src ? src[i] : { pk: -120, rms: -120 };
     c.pk = s.pk > c.pk ? s.pk : Math.max(s.pk, c.pk - 20 * dt);         // instant attack, 20 dB/s fall
@@ -1171,11 +1201,11 @@ function refreshUI() {
   const go = $('btn-go-live');
   go.textContent = isLive && !appCheck ? 'STOP' : 'GO LIVE';
   go.classList.toggle('live', isLive && !appCheck);
-  const canGo = signedIn && !!prof && win.state === 'open';
+  const canGo = signedIn && !!prof && win.state === 'open' && !inputUnmatched;
   go.disabled = !!appCheck || (!isLive && !canGo);
-  go.title = isLive || canGo ? '' : !signedIn ? 'Sign in to load your slot first' : !prof ? 'No slot loaded: book one on grooveline.org'
+  go.title = isLive || canGo ? '' : inputUnmatched ? `Pick your input again: "${inputUnmatched}" wasn't found` : !signedIn ? 'Sign in to load your slot first' : !prof ? 'No slot loaded: book one on grooveline.org'
     : win.state === 'early' ? `Opens at ${fmtTime(new Date(win.opensAt))}, 15 minutes before your slot` : 'Your slot has ended';
-  $('btn-check').disabled = isLive && !appCheck;
+  $('btn-check').disabled = (isLive && !appCheck) || (!isLive && !!inputUnmatched);
   $('btn-check').textContent = appCheck ? 'Stop check' : 'Stream check';
   $('fader').classList.toggle('locked', isLive);
   $('m-hint').textContent = isLive
@@ -1401,6 +1431,8 @@ function setLive(on) {
     // The stream ended under a running stream check (STOP, or the app gave up).
     if (appCheck) { endAppCheck(false); setChkErr('chk-ready-err', 'The check stopped. The log shows why.'); }
     if (isRecording && recModeNow === 'pcm') toggleRecording();
+    // The show recording is joined and saved by main.js after STOP: say so until recording-stopped arrives.
+    if (isRecording && recModeNow === 'show') { clearInterval(recTimerInterval); const rb = $('btn-record'); rb.textContent = 'SAVING…'; rb.disabled = true; }
     if (!canvasCapStream) startPreview().then(refreshUI);
   }
   refreshUI();
@@ -1554,12 +1586,13 @@ function startShowRecordingUI() {
   isRecording = true; recModeNow = 'show'; recStartTime = Date.now();
   setRecordingUI(true);
   clearInterval(recTimerInterval);
-  recTimerInterval = setInterval(() => { $('btn-record').textContent = '● REC ' + fmtClock(Math.floor((Date.now() - recStartTime) / 1000)); }, 1000);
+  $('btn-record').title = 'Your video show is being recorded. It is saved as MP4 when you press STOP.';
+  recTimerInterval = setInterval(() => { $('btn-record').textContent = '● SHOW ' + fmtClock(Math.floor((Date.now() - recStartTime) / 1000)); }, 1000);
   addRecLog('MP4 recording of your video show…');
   addLog(`Recording your video show on this computer (${recFolder}). It is saved as MP4 when you press STOP.`, 'info');
 }
 async function toggleRecording() {
-  if (isRecording && recModeNow === 'show') { addLog('Your video show is being recorded: it is saved when you press STOP.', 'info'); return; }
+  if (isRecording && recModeNow === 'show') { addLog(isLive ? 'Your video show is being recorded: it is saved when you press STOP.' : 'Saving your video show…', 'info'); return; }
   if (isRecording) {
     isRecording = false; clearInterval(recTimerInterval); setRecordingUI(false);
     if (recModeNow === 'webm') detachRecorderTap();
@@ -1598,8 +1631,10 @@ async function toggleRecording() {
 function showRecInFolder() { if (lastRecPath) window.grooveline.showInFolder(lastRecPath); }
 window.grooveline.onRecordingLog(({ msg }) => addRecLog(msg));
 window.grooveline.onRecordingStopped(({ path: p, error, note }) => {
-  const wasCam = recModeNow === 'cam';
+  const wasCam = recModeNow === 'cam', wasShow = recModeNow === 'show';
   isRecording = false; recModeNow = null; clearInterval(recTimerInterval); setRecordingUI(false);
+  const rb = $('btn-record'); rb.title = ''; rb.disabled = false;
+  if (wasShow && p) { rb.textContent = '✓ SAVED'; rb.disabled = true; setTimeout(() => { if (!isRecording) { rb.disabled = false; setRecordingUI(false); } }, 4000); }
   if (wasCam && !isLive) startPreview();
   if (note) { addRecLog(note); addLog(note, 'info'); }
   if (p) {
