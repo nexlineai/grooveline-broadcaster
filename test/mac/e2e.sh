@@ -23,7 +23,6 @@ printf 'logLevel: info\nreadTimeout: 60s\nwriteTimeout: 60s\napi: yes\napiAddres
 "$W/mediamtx" "$W/mediamtx.yml" >"$W/mediamtx.log" 2>&1 &
 sleep 2
 
-npm i --no-save --no-audit --no-fund --prefix test/mac/e2e playwright-core@1.63.0 >/dev/null 2>&1
 note input "default input: $(SwitchAudioSource -t input -c) · $(sw_vers -productVersion) $ARCH"
 node test/mac/e2e/freeze.mjs "$APP/Contents/MacOS/Grooveline Broadcaster" "$W/out"; RC=$?
 note mediamtx "$(grep -E 'is publishing|closed|timeout' "$W/mediamtx.log" | sed 's/^[0-9/ :]*//' | tail -6 | tr '\n' ' ' | cut -c1-900)"
