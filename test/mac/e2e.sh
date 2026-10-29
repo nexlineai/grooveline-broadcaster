@@ -8,7 +8,7 @@ ARCH=$(uname -m); [ "$ARCH" = arm64 ] && { EB=--arm64; APP="dist/mac-arm64/Groov
   || { EB=--x64; APP="dist/mac/Grooveline Broadcaster.app"; MTX=amd64; SUM=cf20e0f0d998e89c1176ea9a6888622ad72a30da06a3f2b61f9d26e003b3637b; }
 W=$RUNNER_TEMP/e2e; mkdir -p "$W"
 # VARIANT=baseline builds 1.6.1's src/ (the release on main), to show the test still catches the bug.
-[ "${VARIANT:-fix}" = baseline ] && { git fetch -q --depth 1 origin 6fb675e && git checkout 6fb675e -- src/ || exit 1; }
+[ "${VARIANT:-fix}" = baseline ] && { git fetch -q --depth 1 origin 6fb675e0a06d5a2df2076d6e4440e2a8e9740fb3 && git checkout 6fb675e0a06d5a2df2076d6e4440e2a8e9740fb3 -- src/ || exit 1; }
 
 CSC_IDENTITY_AUTO_DISCOVERY=false npx electron-builder --mac dir $EB --publish never >"$W/build.log" 2>&1 || { tail -30 "$W/build.log"; exit 1; }
 codesign --force --deep --sign - "$APP"
