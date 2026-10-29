@@ -596,6 +596,14 @@ function createTray() {
 
 // ─── App lifecycle ────────────────────────────────────────────────────────────
 app.whenReady().then(() => {
+  // 1.6.3: the Apple Silicon app carries native ffmpeg built for macOS 12+ (minos 12.0). On macOS 11 it could open
+  // but never stream, so say so now instead of at GO LIVE. Darwin 21 = macOS 12.
+  if (process.platform === 'darwin' && process.arch === 'arm64' && parseInt(os.release(), 10) < 21) {
+    dialog.showMessageBoxSync({ type: 'error', message: 'Grooveline Broadcaster needs macOS 12 Monterey or newer on this Mac.',
+      detail: 'Update macOS with Software Update, then open the app again.' });
+    app.quit();
+    return;
+  }
   openLogFile();
   writeLog('info', buildLine());
   // Windows/Linux: no menu bar (Electron's default File/Edit/View showed up under a native frame). macOS keeps the

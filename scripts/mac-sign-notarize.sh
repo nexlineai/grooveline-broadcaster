@@ -1,7 +1,7 @@
 #!/bin/bash
 # Sign, build, verify, notarize and staple both macOS dmgs (arm64 + x64).
 # Shared by CI (release-mac.yml) and the USB-stick kit (mac-release.sh).
-# Run with node_modules installed and bin/mac filled (scripts/mac-deps.sh). Needs:
+# Run with node_modules installed and bin/mac/{x64,arm64} filled (scripts/mac-deps.sh). Needs:
 #   - a "Developer ID Application" identity: in $CSC_KEYCHAIN if set (CI), else the keychain search list
 #   - a notarytool keychain profile $NOTARY_PROFILE (default grooveline-notary), stored in $CSC_KEYCHAIN if set
 # Usage: scripts/mac-sign-notarize.sh <output dir>
@@ -31,14 +31,20 @@ echo "  notary login: OK"
 
 step "Checking and signing the bundled sox and ffmpeg"
 [ -z "${GITHUB_ACTIONS:-}" ] && echo "  If macOS asks to let codesign use your key: type your Mac password and click Always Allow."
-for b in sox ffmpeg; do
-  [ -x "bin/mac/$b" ] || fail "bin/mac/$b is missing (run scripts/mac-deps.sh)."
-  bad=$(otool -L "bin/mac/$b" | tail -n +2 | awk '{print $1}' | grep -vE '^(/usr/lib/|/System/)' || true)
-  [ -z "$bad" ] || fail "bin/mac/$b needs libraries that aren't part of macOS ($bad)."
-  # shellcheck disable=SC2046
-  codesign --force --timestamp --options runtime --entitlements build/entitlements.mac.plist \
-    --sign "$IDENT" $(kc) "bin/mac/$b" || fail "could not sign $b (keychain prompt denied?)."
-  echo "  $b: $(lipo -archs "bin/mac/$b"), signed"
+# One set per app since 1.6.3: bin/mac/x64 (Intel app) and bin/mac/arm64 (Apple Silicon app, native).
+for arch in x64 arm64; do
+  want=$([ $arch = arm64 ] && echo arm64 || echo x86_64)
+  for b in sox ffmpeg; do
+    f="bin/mac/$arch/$b"
+    [ -x "$f" ] || fail "$f is missing (run scripts/mac-deps.sh)."
+    [ "$(lipo -archs "$f")" = "$want" ] || fail "$f is $(lipo -archs "$f"), not $want."
+    bad=$(otool -L "$f" | tail -n +2 | awk '{print $1}' | grep -vE '^(/usr/lib/|/System/)' || true)
+    [ -z "$bad" ] || fail "$f needs libraries that aren't part of macOS ($bad)."
+    # shellcheck disable=SC2046
+    codesign --force --timestamp --options runtime --entitlements build/entitlements.mac.plist \
+      --sign "$IDENT" $(kc) "$f" || fail "could not sign $f (keychain prompt denied?)."
+    echo "  $arch/$b: $want, signed"
+  done
 done
 
 step "Building and signing both dmgs (Apple Silicon + Intel)"

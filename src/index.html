@@ -64,7 +64,6 @@ button:focus-visible, [tabindex]:focus-visible, select:focus-visible, input:focu
 .a-tab { font: 12px/1 var(--f-mono); letter-spacing: .14em; color: var(--muted); background: none; border: 0; border-bottom: 2px solid transparent; padding: 0 12px; cursor: pointer; }
 .a-tab:hover { color: var(--text); }
 .a-tab[aria-selected="true"] { color: var(--teal); border-bottom-color: var(--teal); }
-.a-tab.right { margin-left: auto; }
 
 /* ── Body ── */
 .a-body { display: grid; grid-template-columns: minmax(0, 1fr) 236px; min-height: 0; }
@@ -267,8 +266,8 @@ details.adv[open] > summary::after { content: '⌄'; }
     <button class="a-tab" role="tab" data-p="recording">RECORDING</button>
     <button class="a-tab" role="tab" data-p="nowplaying">NOW PLAYING</button>
     <button class="a-tab" role="tab" data-p="log">LOG</button>
+    <button class="a-tab" role="tab" data-p="settings">SETTINGS</button>
     <button class="a-tab" role="tab" data-p="help">HELP</button>
-    <button class="a-tab right" role="tab" data-p="settings">SETTINGS</button>
   </nav>
 
   <div class="a-body">
@@ -309,7 +308,7 @@ details.adv[open] > summary::after { content: '⌄'; }
             <div class="field" style="flex:0 0 180px"><label for="audio-channels">Channels</label><select id="audio-channels"></select></div>
             <div class="hint" id="ch-hint" style="padding-bottom:8px"></div>
           </div>
-          <div id="video-row" style="display:none">
+          <div id="video-row">
             <div class="cam">
               <div id="preview-wrap" title="Double-click for full screen">
                 <video id="preview-video" autoplay muted playsinline></video>
@@ -318,7 +317,7 @@ details.adv[open] > summary::after { content: '⌄'; }
                 <div id="preview-fs-hint">Double-click or press Esc to leave full screen</div>
               </div>
               <div class="field"><label for="video-device">Camera</label><select id="video-device"></select>
-                <div class="hint" style="font-size:13px">Double-click the preview for full screen.</div></div>
+                <div class="hint" id="cam-hint" style="font-size:13px">Double-click the preview for full screen.</div></div>
             </div>
           </div>
           <div class="hint" id="in-hint">Pick your mixer's USB output, or "Monitor of …" to send what this computer plays. <a onclick="showFix('fix-input')">Which one?</a></div>
@@ -697,8 +696,16 @@ function updateAudioOnly() {
   return changed;
 }
 
+// The camera picker is always shown (1.6.3), on every OS: hidden on a radio slot it looked like something was kept from
+// the DJ. A radio slot never opens the camera (startPreview asks for no video, so no camera light); the box says why.
+const RADIO_CAM_TEXT = () => cfg.profiles.some(p => p.enabled) ? "Radio slot: your camera isn't sent." : 'The camera is used on video slots.';
 function toggleVideoSection(ao) {
-  $('video-row').style.display = ao ? 'none' : '';
+  const ph = $('preview-ph');
+  if (ao) ph.textContent = RADIO_CAM_TEXT();
+  else if (ph.dataset.radio) ph.textContent = 'No camera preview';
+  ph.dataset.radio = ao ? '1' : '';
+  $('preview-fs').hidden = ao; $('cam-hint').hidden = ao;
+  $('preview-wrap').title = ao ? '' : 'Double-click for full screen'; $('preview-wrap').style.cursor = ao ? 'default' : '';
   $('video-quality-section').style.display = ao ? 'none' : '';
 }
 
@@ -1346,7 +1353,7 @@ function bind() {
   // Video preview: double-click (or ⛶) for full screen; double-click or Esc again to leave.
   const wrap = $('preview-wrap');
   const toggleFs = () => document.fullscreenElement ? document.exitFullscreen().catch(() => {}) : wrap.requestFullscreen().catch(e => addLog('Full screen failed: ' + e.message, 'warn'));
-  wrap.addEventListener('dblclick', e => { if (e.target.id !== 'preview-fs') toggleFs(); });
+  wrap.addEventListener('dblclick', e => { if (e.target.id !== 'preview-fs' && !cfg.audioOnly) toggleFs(); });
   $('preview-fs').onclick = e => { e.stopPropagation(); toggleFs(); };
   document.addEventListener('fullscreenchange', () => {
     const h = $('preview-fs-hint'); h.style.opacity = '1';

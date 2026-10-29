@@ -1,6 +1,6 @@
 {
   "name": "grooveline-broadcaster",
-  "version": "1.6.2",
+  "version": "1.6.3",
   "description": "Grooveline Radio — Live Streaming Broadcaster",
   "main": "src/main.js",
   "author": "Grooveline Radio",
@@ -89,7 +89,7 @@
       },
       "extraResources": [
         {
-          "from": "bin/mac/",
+          "from": "bin/mac/${arch}/",
           "to": ".",
           "filter": [
             "**/*"

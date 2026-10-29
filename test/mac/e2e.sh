@@ -1,6 +1,7 @@
 #!/bin/bash
 # Mac e2e on a GitHub runner (29 Oct 2026): build this runner's app, give it a fake camera, BlackHole as the default
-# input with a tone in it, and a local MediaMTX v1.4.0 (same version and timeouts as production), then run freeze.mjs.
+# input with a tone in it, and a local MediaMTX v1.4.0 (same version and timeouts as production: readTimeout 20 s
+# since 29 Oct), then run freeze.mjs.
 set -uo pipefail
 cd "$(dirname "$0")/../.."
 note() { echo "::notice title=$1::$2"; }
@@ -16,12 +17,15 @@ codesign --force --deep --sign - "$APP"
 brew install --cask blackhole-2ch >/dev/null 2>&1; brew install switchaudio-osx >/dev/null 2>&1
 sudo killall coreaudiod; sleep 6
 SwitchAudioSource -t input -s "BlackHole 2ch" >/dev/null
-bin/mac/sox -q -n -t coreaudio "BlackHole 2ch" synth 900 sine 440 vol 0.3 >/dev/null 2>&1 &
+"$APP/Contents/Resources/sox" -q -n -t coreaudio "BlackHole 2ch" synth 900 sine 440 vol 0.3 >"$W/tone.log" 2>&1 &
+TONE=$!; sleep 1
+# Silence would stream just as well, so a dead tone must fail here (the app's own sox plays it: arm64 on arm64 since 1.6.3).
+kill -0 $TONE 2>/dev/null || { echo "::error title=e2e::tone (bundled sox → BlackHole) exited: $(tr '\n' ' ' < "$W/tone.log" | cut -c1-300)"; exit 1; }
 
 curl -fsSL -o "$W/mtx.tgz" "https://github.com/bluenviron/mediamtx/releases/download/v1.4.0/mediamtx_v1.4.0_darwin_$MTX.tar.gz"
 echo "$SUM  $W/mtx.tgz" | shasum -a 256 -c >/dev/null || { echo "::error::mediamtx checksum mismatch"; exit 1; }
 tar xzf "$W/mtx.tgz" -C "$W" mediamtx
-printf 'logLevel: info\nreadTimeout: 60s\nwriteTimeout: 60s\napi: yes\napiAddress: 127.0.0.1:9997\nrtmp: yes\nrtmpAddress: :1935\nhls: no\nrtsp: no\nwebrtc: no\nsrt: no\npaths:\n  all_others:\n' > "$W/mediamtx.yml"
+printf 'logLevel: info\nreadTimeout: 20s\nwriteTimeout: 60s\napi: yes\napiAddress: 127.0.0.1:9997\nrtmp: yes\nrtmpAddress: :1935\nhls: no\nrtsp: no\nwebrtc: no\nsrt: no\npaths:\n  all_others:\n' > "$W/mediamtx.yml"
 "$W/mediamtx" "$W/mediamtx.yml" >"$W/mediamtx.log" 2>&1 &
 echo $! > "$W/mtx.pid"
 export MTX_PID_FILE="$W/mtx.pid" MTX_BIN="$W/mediamtx" MTX_CONF="$W/mediamtx.yml" MTX_LOG="$W/mediamtx.log"

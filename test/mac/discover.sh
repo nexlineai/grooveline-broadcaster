@@ -4,7 +4,7 @@
 set -uo pipefail
 cd "$(dirname "$0")/../.."
 note() { echo "::notice title=$1::$(echo "$2" | tr '\n' ' ' | cut -c1-900)"; }
-SOX=bin/mac/sox
+TOOLS=bin/mac/$([ "$(uname -m)" = arm64 ] && echo arm64 || echo x64); SOX=$TOOLS/sox
 inputs() { system_profiler SPAudioDataType 2>/dev/null | grep -E "^ {8}[^ ].*:$|Input Channels" | sed 's/^ *//' | tr '\n' ' '; }
 
 note system "macOS $(sw_vers -productVersion) $(uname -m) | $(sysctl -n machdep.cpu.brand_string) | $(sysctl -n hw.ncpu) cpu | rosetta: $(arch -x86_64 /usr/bin/true 2>/dev/null && echo yes || echo no) | audio before: $(inputs)"
@@ -26,7 +26,7 @@ note throttle-rvfc "$(GL_LOOP=rvfc run)"
 note throttle-timer "$(GL_LOOP=timer run)"
 note throttle-direct "$(GL_LOOP=direct run)"
 note throttle-rvfc-flags "$(GL_FLAGS=1 GL_LOOP=rvfc run)"
-R=$(GL_MODE=enc GL_FFMPEG="$PWD/bin/mac/ffmpeg" run)
+R=$(GL_MODE=enc GL_FFMPEG="$PWD/$TOOLS/ffmpeg" run)
 note h264-caps "$(echo "$R" | python3 -c "import json,sys; r=json.load(sys.stdin); print(r.get('chrome'), json.dumps(r.get('mediaRecorder')), json.dumps(r.get('videoEncoder')))" 2>&1)"
 note h264-tests "$(echo "$R" | python3 -c "
 import json,sys; r=json.load(sys.stdin)

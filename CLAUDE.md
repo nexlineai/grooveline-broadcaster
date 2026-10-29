@@ -19,7 +19,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   (`/Volumes/<title>`). With one shared title the builds unmounted each other at random (22 Oct: "No such file …
   .background/dmg-background.png", `hdiutil detach … No such file`). So `dmg.title` is `Grooveline Broadcaster${arch}`:
   the Intel volume keeps the plain name, the Apple Silicon one is `Grooveline Broadcaster-arm64`.
-- `scripts/mac-deps.sh` fetches the pinned, checksummed `bin/mac` ffmpeg and sox (`bin/` is gitignored).
+- `scripts/mac-deps.sh` fetches the pinned, checksummed ffmpeg and sox into `bin/mac/x64` and `bin/mac/arm64` (`bin/` is
+  gitignored); electron-builder copies `bin/mac/${arch}/` into each app.
 
 ## Commands
 
@@ -29,7 +30,7 @@ npm run dev                  # Run with DevTools open
 npm run dist:mac             # Build macOS DMG (universal arm64+x64)
 npm run build:win            # Build Windows NSIS installer (run as Administrator)
 npm run build:linux          # Build Linux AppImage/.deb
-scripts/mac-deps.sh          # Fetch the pinned ffmpeg+sox for macOS into bin/mac/
+scripts/mac-deps.sh          # Fetch the pinned ffmpeg+sox for macOS into bin/mac/{x64,arm64}/
 npm run prepare-binaries-win # Download ffmpeg.exe for Windows bin/win/
 ```
 
@@ -119,7 +120,7 @@ from `GET /check/status` (our Icecast), polled every 3 s, never from ffmpeg.
   200) for an rtmp booking, and reports a radio fallback as `icecast`, so the home page plays the right player.
 
 ### Cameras (1.3.1, 21 Oct 2026)
-- The camera picker (`#video-row`) shows only when Grooveline Video is enabled (`isVideoDest`, since 1.4.0).
+- The camera picker (`#video-row`) is always shown since 1.6.3 (1.4.0–1.6.2: only with Grooveline Video enabled).
 - **Hot-plug:** `watchDeviceChanges()` rescans on Chromium's `devicechange` (Windows, macOS and Linux), debounced
   1.2 s. While live it only logs; the rescan restarts the preview, so it never runs mid-stream.
 - **Linux:** `listV4l2Devices()` reads `/sys/class/video4linux` (no v4l-utils needed) and keeps only `index` 0
@@ -137,7 +138,7 @@ from `GET /check/status` (our Icecast), polled every 3 s, never from ffmpeg.
 
 ### Binaries
 
-- `bin/mac/` — `ffmpeg` and `sox` (populated by `prepare-binaries`)
+- `bin/mac/x64/`, `bin/mac/arm64/` — `ffmpeg` and `sox` per app architecture (populated by `scripts/mac-deps.sh`)
 - `bin/win/` — `ffmpeg.exe` (populated by `prepare-binaries-win`)
 - Linux — system ffmpeg from PATH, no bundling
 - `findFFmpeg()` checks `process.resourcesPath` first (production), then PATH (dev)
@@ -215,8 +216,8 @@ See grooveline memory file for full context.
   verifies, staples and checks Gatekeeper.
   - The signed build runs in GitHub Actions. `scripts/mac-release.sh` (a USB-stick kit for the Monterey Air) is the
     fallback.
-  - `bin/mac` ffmpeg (minos 10.12) and sox (minos 10.10) are x86_64-only and link only `/usr/lib` and `/System`.
-    On Apple Silicon they need Rosetta.
+  - `bin/mac/x64` ffmpeg (minos 10.12) and sox (minos 10.10) are x86_64-only; `bin/mac/arm64` ffmpeg (minos 12.0) and
+    sox (minos 11.0) are arm64-only (1.6.3). All link only `/usr/lib` and `/System`.
 - **Windows build must run as Administrator.**
 
 ### 1.6.0 (22 Oct 2026)
@@ -302,6 +303,23 @@ See grooveline memory file for full context.
   Playwright:** it turns on focus emulation, which keeps a hidden page running (the first e2e passed on 1.6.1). The harness
   uses Node's inspector in the main process and `webContents.executeJavaScript`. Results are `::notice` annotations.
 - **Native Apple Silicon tools** (`scripts/mac-tools-arm64.sh`, job `arm64-tools`): ffmpeg 9.0.2 (Martin Riedl static,
-  minos 12.0) and sox 14.4.2 built from source (CoreAudio + raw only); both arm64-only and system-libraries-only. Not
-  wired into the app yet: `bin/mac` is still x86_64 (Rosetta).
+  minos 12.0) and sox 14.4.2 built from source (CoreAudio + raw only); both arm64-only and system-libraries-only. Wired
+  into the app in 1.6.3.
+
+### 1.6.3 (29 Oct 2026)
+- **Native Apple Silicon:** each Mac app carries its own architecture's tools: `mac-deps.sh` fills `bin/mac/x64` and
+  `bin/mac/arm64` from `downloads.grooveline.org/build-deps/mac/` (never delete those keys), `package.json` copies
+  `bin/mac/${arch}/`, `mac-sign-notarize.sh` signs and lipo-checks both sets, and `mac-smoke.sh` fails unless each app's
+  tools are its own architecture only. 1.6.2's arm64 dmg bundled the x86_64 tools, which fail with "bad CPU type" on an
+  M-Mac without Rosetta (macOS never offers Rosetta for a helper an arm64 app starts), so the site sent every Mac the
+  Intel dmg. GitHub's arm64 runners have Rosetta, so only the lipo check catches a regression there.
+- **Apple Silicon needs macOS 12:** the arm64 ffmpeg is minos 12.0. electron-builder has one `minimumSystemVersion` for
+  both archs (Intel stays 10.15+), so the arm64 app shows a dialog and quits below Darwin 21.
+- **Camera picker always visible** (Zé, 29 Oct: "otherwise people feel something is hidden from them"). On a radio slot
+  (`cfg.audioOnly`) `startPreview` still asks for no video, so the camera light stays off; `toggleVideoSection` puts
+  "Radio slot: your camera isn't sent." (or "The camera is used on video slots." with no slot) in `#preview-ph` and
+  hides the full-screen button and hint. `video-quality-section` still shows only on video slots.
+- **SETTINGS tab** sits before HELP (the `.a-tab.right` push is gone).
+- `test/mac/e2e.sh` plays its tone with the app's own sox and fails if the tone dies within a second (silence would
+  stream just as well).
 

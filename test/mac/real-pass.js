@@ -6,7 +6,7 @@
 const fs = require('fs'), path = require('path'), os = require('os'), readline = require('readline');
 const { execFileSync, spawnSync, spawn } = require('child_process');
 const APP = '/Applications/Grooveline Broadcaster.app', RES = path.join(APP, 'Contents/Resources');
-const FFMPEG = process.env.GL_FFMPEG || path.join(RES, process.arch === 'arm64' && fs.existsSync(path.join(RES, 'arm64/ffmpeg')) ? 'arm64/ffmpeg' : 'ffmpeg');
+const FFMPEG = process.env.GL_FFMPEG || path.join(RES, 'ffmpeg'); // each app carries its own architecture's tools (1.6.3)
 const LOG = path.join(os.homedir(), 'Library/Application Support/Grooveline Broadcaster/logs/broadcaster.log');
 const OUT = process.argv[2] || path.join(os.homedir(), 'Desktop');
 const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 16);
@@ -28,7 +28,7 @@ function sample() {
   const ps = sh('ps', ['-Ao', 'pcpu=,command=']).split('\n');
   const cpu = re => ps.filter(l => re.test(l)).reduce((a, l) => a + parseFloat(l), 0);
   const sendQ = sh('netstat', ['-an', '-p', 'tcp']).split('\n').filter(l => /\.1935\s+ESTABLISHED/.test(l)).map(l => +l.trim().split(/\s+/)[2])[0];
-  samples.push({ t: Date.now(), front, page: cpu(/Grooveline Broadcaster Helper \(Renderer\)/), ffmpeg: cpu(/Contents\/Resources\/(arm64\/)?ffmpeg /), sendQ: sendQ ?? null });
+  samples.push({ t: Date.now(), front, page: cpu(/Grooveline Broadcaster Helper \(Renderer\)/), ffmpeg: cpu(/Contents\/Resources\/ffmpeg /), sendQ: sendQ ?? null });
 }
 
 // [mac video] lines of the app's log since the start: ffmpeg time, speed, sox drops.

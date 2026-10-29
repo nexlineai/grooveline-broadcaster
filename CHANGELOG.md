@@ -2,6 +2,12 @@
 
 The app shows the sections newer than the version you had before under "What's new" the first time it opens.
 
+## 1.6.3
+
+- Apple Silicon Macs: the app now runs natively, without Rosetta. Apple Silicon needs macOS 12 Monterey or newer; Intel Macs still work from macOS 10.15.
+- Your camera picker is always on ON AIR, also on a radio slot. On a radio slot the camera is not opened and not sent.
+- SETTINGS now sits with the other tabs, before HELP.
+
 ## 1.6.2
 
 - Mac video shows keep going when the app window is hidden, minimized or on another desktop. Before, the picture froze within seconds, the sound stopped with it, and Grooveline ended the show a minute later.
