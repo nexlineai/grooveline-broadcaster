@@ -696,17 +696,22 @@ function updateAudioOnly() {
   return changed;
 }
 
+function toggleVideoSection(ao) {
+  setCamBox(ao);
+  $('video-quality-section').style.display = ao ? 'none' : '';
+}
+
 // The camera picker is always shown (1.6.3), on every OS: hidden on a radio slot it looked like something was kept from
 // the DJ. A radio slot never opens the camera (startPreview asks for no video, so no camera light); the box says why.
+// refreshUI passes radio = false while a video check sends the camera, which it does on a radio slot too.
 const RADIO_CAM_TEXT = () => cfg.profiles.some(p => p.enabled) ? "Radio slot: your camera isn't sent." : 'The camera is used on video slots.';
-function toggleVideoSection(ao) {
+function setCamBox(radio) {
   const ph = $('preview-ph');
-  if (ao) ph.textContent = RADIO_CAM_TEXT();
+  if (radio) ph.textContent = RADIO_CAM_TEXT();
   else if (ph.dataset.radio) ph.textContent = 'No camera preview';
-  ph.dataset.radio = ao ? '1' : '';
-  $('preview-fs').hidden = ao; $('cam-hint').hidden = ao;
-  $('preview-wrap').title = ao ? '' : 'Double-click for full screen'; $('preview-wrap').style.cursor = ao ? 'default' : '';
-  $('video-quality-section').style.display = ao ? 'none' : '';
+  ph.dataset.radio = radio ? '1' : '';
+  $('preview-fs').hidden = radio; $('cam-hint').hidden = radio;
+  $('preview-wrap').title = radio ? '' : 'Double-click for full screen'; $('preview-wrap').style.cursor = radio ? 'default' : '';
 }
 
 // ── Devices ────────────────────────────────────────────────────────
@@ -1240,7 +1245,9 @@ function refreshUI() {
     : 'Peaks between −12 and −3 are right. CLIP means too loud: turn your mixer down.';
   $('audio-device').disabled = isLive; $('audio-channels').disabled = isLive; $('video-device').disabled = isLive; $('refresh-btn').disabled = isLive;
   $('in-r').textContent = isLive ? 'locked while live' : '';
-  if (isLive && !canvasCapStream && !cfg.audioOnly) { $('preview-ph').textContent = platform === 'darwin' ? 'No camera preview' : 'The camera is in use by the stream'; }
+  const camSent = isLive && liveShowIsVideo && !liveOnRadioFallback;   // a video show, or a video check on any slot
+  setCamBox(cfg.audioOnly && !camSent);
+  if (camSent && !canvasCapStream) { $('preview-ph').textContent = platform === 'darwin' ? 'No camera preview' : 'The camera is in use by the stream'; }
 
   renderSteps(signedIn, prof);
   renderBanners();
@@ -1353,7 +1360,7 @@ function bind() {
   // Video preview: double-click (or ⛶) for full screen; double-click or Esc again to leave.
   const wrap = $('preview-wrap');
   const toggleFs = () => document.fullscreenElement ? document.exitFullscreen().catch(() => {}) : wrap.requestFullscreen().catch(e => addLog('Full screen failed: ' + e.message, 'warn'));
-  wrap.addEventListener('dblclick', e => { if (e.target.id !== 'preview-fs' && !cfg.audioOnly) toggleFs(); });
+  wrap.addEventListener('dblclick', e => { if (e.target.id !== 'preview-fs' && !$('preview-fs').hidden) toggleFs(); });
   $('preview-fs').onclick = e => { e.stopPropagation(); toggleFs(); };
   document.addEventListener('fullscreenchange', () => {
     const h = $('preview-fs-hint'); h.style.opacity = '1';

@@ -318,7 +318,10 @@ See grooveline memory file for full context.
 - **Camera picker always visible** (Zé, 29 Oct: "otherwise people feel something is hidden from them"). On a radio slot
   (`cfg.audioOnly`) `startPreview` still asks for no video, so the camera light stays off; `toggleVideoSection` puts
   "Radio slot: your camera isn't sent." (or "The camera is used on video slots." with no slot) in `#preview-ph` and
-  hides the full-screen button and hint. `video-quality-section` still shows only on video slots.
+  hides the full-screen button and hint (`setCamBox`). A video check is a one-off profile, so `cfg.audioOnly` stays true
+  during it: `refreshUI` calls `setCamBox(cfg.audioOnly && !camSent)` (`camSent` = live, `liveShowIsVideo`, not on radio
+  fallback), or the box would say "isn't sent" while the check streams the camera. `video-quality-section` still shows
+  only on video slots.
 - **SETTINGS tab** sits before HELP (the `.a-tab.right` push is gone).
 - `test/mac/e2e.sh` plays its tone with the app's own sox and fails if the tone dies within a second (silence would
   stream just as well).
