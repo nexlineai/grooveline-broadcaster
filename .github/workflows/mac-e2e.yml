@@ -1,0 +1,36 @@
+# Broadcaster checks on GitHub's own Macs (29 Oct 2026), so Mac fixes are tested without a dual-boot round.
+# Step 1 (this file now): discovery only. No secrets, read-only token, nothing is published.
+name: mac-e2e
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [mac-e2e]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mac-e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  discover:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-15-intel, macos-26]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 22
+      - name: Bundle sox + ffmpeg (pinned and checksummed)
+        run: scripts/mac-deps.sh
+      - run: npm ci --no-audit --no-fund
+      - name: Discovery (audio devices, fake camera, hidden-window stall, H264)
+        run: test/mac/discover.sh

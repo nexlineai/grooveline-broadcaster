@@ -1,0 +1,84 @@
+<!doctype html><meta charset="utf-8">
+<canvas id="c" width="1280" height="720"></canvas>
+<canvas id="q" width="1280" height="720"></canvas>
+<script>
+// Two test pictures at 30 fps, so the encoders get real frames without a camera. "c" is busy and makes the encoder
+// add keyframes by itself; "q" is nearly still, like a DJ in front of a wall, so only the keyframe option adds them.
+const c = document.getElementById('c'), g = c.getContext('2d');
+const q = document.getElementById('q'), h = q.getContext('2d');
+let n = 0;
+setInterval(() => {
+  n++;
+  h.fillStyle = '#20242a'; h.fillRect(0, 0, 1280, 720);
+  h.fillStyle = '#c84'; h.fillRect(200 + n % 600, 300, 40, 40);
+  g.fillStyle = `hsl(${n * 3 % 360},60%,40%)`; g.fillRect(0, 0, 1280, 720);
+  for (let i = 0; i < 40; i++) {
+    g.fillStyle = `rgb(${(i * 37 + n * 5) % 255},${(i * 91) % 255},${(n * 11 + i * 3) % 255})`;
+    g.fillRect((i * 131 + n * 9) % 1280, (i * 71 + n * 4) % 720, 60, 60);
+  }
+  g.fillStyle = '#fff'; g.font = '120px sans-serif'; g.fillText(String(n), 100 + (n * 7) % 900, 360);
+}, 1000 / 30);
+
+const SECONDS = 10, BITRATE = 2500000;
+const wait = ms => new Promise(r => setTimeout(r, ms));
+
+// MediaRecorder H264 in Matroska, as the stream would use it. opts = the keyframe options under test.
+async function mrRun(name, canvas, opts) {
+  const stream = canvas.captureStream(30), chunks = [];
+  let rec;
+  try { rec = new MediaRecorder(stream, { mimeType: 'video/x-matroska;codecs=avc1', videoBitsPerSecond: BITRATE, ...opts }); }
+  catch (e) { return { name, options: opts, error: e.message }; }
+  rec.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
+  const stopped = new Promise(r => { rec.onstop = r; });
+  rec.start(100);
+  await wait(SECONDS * 1000);
+  rec.stop(); await stopped;
+  stream.getTracks().forEach(t => t.stop());
+  const file = new Uint8Array(await new Blob(chunks).arrayBuffer());
+  return { name, options: opts, mimeType: rec.mimeType, kbps: Math.round(file.length * 8 / SECONDS / 1000), file };
+}
+
+// WebCodecs: the page asks for a keyframe every 60 frames itself. Hardware first, software if hardware isn't offered.
+async function veRun() {
+  const name = 'webcodecs.h264';
+  const base = { codec: 'avc1.42E01F', width: 1280, height: 720, bitrate: BITRATE, framerate: 30, latencyMode: 'realtime', avc: { format: 'annexb' } };
+  let cfg = { ...base, hardwareAcceleration: 'prefer-hardware' };
+  if (!(await VideoEncoder.isConfigSupported(cfg)).supported) cfg = { ...base, hardwareAcceleration: 'prefer-software' };
+  const parts = [], keys = [];
+  let frames = 0, maxQueue = 0, error = null;
+  const enc = new VideoEncoder({
+    output: ch => { const b = new Uint8Array(ch.byteLength); ch.copyTo(b); parts.push(b); if (ch.type === 'key') keys.push(+(ch.timestamp / 1e6).toFixed(2)); },
+    error: e => { error = e.message; }
+  });
+  try { enc.configure(cfg); } catch (e) { return { name, error: e.message }; }
+  const t0 = performance.now();
+  while (performance.now() - t0 < SECONDS * 1000 && !error) {
+    const f = new VideoFrame(c, { timestamp: Math.round((performance.now() - t0) * 1000) });
+    enc.encode(f, { keyFrame: frames % 60 === 0 }); f.close(); frames++;
+    maxQueue = Math.max(maxQueue, enc.encodeQueueSize);
+    await wait(1000 / 30);
+  }
+  try { await enc.flush(); enc.close(); } catch (e) { error = error || e.message; }
+  const total = parts.reduce((a, p) => a + p.length, 0), file = new Uint8Array(total);
+  let o = 0; for (const p of parts) { file.set(p, o); o += p.length; }
+  return { name, hardwareAcceleration: cfg.hardwareAcceleration, framesSent: frames, maxQueue, chunkKeyframes: keys, kbps: Math.round(total * 8 / SECONDS / 1000), error, file };
+}
+
+async function runCheck() {
+  const mediaRecorder = {};
+  for (const t of ['video/webm;codecs=vp8', 'video/webm;codecs=h264', 'video/x-matroska;codecs=avc1', 'video/mp4;codecs=avc1']) mediaRecorder[t] = MediaRecorder.isTypeSupported(t);
+  const videoEncoder = {};
+  for (const hw of ['prefer-hardware', 'prefer-software']) for (const codec of ['avc1.42E01F', 'avc1.64001F']) {
+    try { videoEncoder[hw + ' ' + codec] = (await VideoEncoder.isConfigSupported({ codec, width: 1280, height: 720, bitrate: BITRATE, framerate: 30, hardwareAcceleration: hw, avc: { format: 'annexb' } })).supported; }
+    catch (e) { videoEncoder[hw + ' ' + codec] = 'error ' + e.message; }
+  }
+  // The three MediaRecorder runs share the clock; WebCodecs runs alone afterwards so it gets the CPU to itself.
+  const tests = await Promise.all([
+    mrRun('mr-still-plain.mkv', q, {}),
+    mrRun('mr-still-every-2s.mkv', q, { videoKeyFrameIntervalDuration: 2000 }),
+    mrRun('mr-busy-every-2s.mkv', c, { videoKeyFrameIntervalDuration: 2000 }),
+  ]);
+  tests.push(await veRun());
+  return { secure: window.isSecureContext, chrome: navigator.userAgent.match(/Chrome\/[\d.]+/)[0], mediaRecorder, videoEncoder, tests };
+}
+</script>

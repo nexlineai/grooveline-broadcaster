@@ -1,0 +1,26 @@
+<!doctype html><meta charset="utf-8"><body style="margin:0;background:#000">
+<video id="v" autoplay muted playsinline style="width:320px"></video>
+<script>
+// The 1.6.1 Mac video path in miniature: camera → canvas → captureStream → MediaRecorder VP8 (index.html ~943).
+// loop=rvfc draws per camera frame like 1.6.1, loop=timer draws on setInterval like the April fix (5d2d745),
+// loop=direct records the camera track itself, with no canvas.
+const loop = new URLSearchParams(location.search).get('loop') || 'rvfc';
+const st = { draws: 0, chunks: 0, bytes: 0 };
+async function start() {
+  const s = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } }, audio: false });
+  const v = document.getElementById('v'); v.srcObject = s; await v.play().catch(() => {});
+  let src = s;
+  if (loop !== 'direct') {
+    const cv = document.createElement('canvas'); cv.width = 1280; cv.height = 720;
+    const g = cv.getContext('2d');
+    const draw = () => { try { g.drawImage(v, 0, 0, 1280, 720); st.draws++; } catch (e) {} };
+    if (loop === 'rvfc') { const f = () => { draw(); v.requestVideoFrameCallback(f); }; v.requestVideoFrameCallback(f); }
+    else setInterval(draw, 1000 / 30);
+    src = cv.captureStream(30);
+  }
+  const mr = new MediaRecorder(src, { mimeType: 'video/webm;codecs=vp8', videoBitsPerSecond: 1000000 });
+  mr.ondataavailable = e => { if (e.data.size) { st.chunks++; st.bytes += e.data.size; } };
+  mr.start(100);
+  return s.getVideoTracks()[0].label;
+}
+</script>
