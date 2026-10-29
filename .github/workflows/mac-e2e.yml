@@ -1,5 +1,6 @@
 # Broadcaster checks on GitHub's own Macs (29 Oct 2026), so Mac fixes are tested without a dual-boot round.
-# Step 1 (this file now): discovery only. No secrets, read-only token, nothing is published.
+# The e2e builds this runner's app and runs a video show to a local MediaMTX while the window is hidden.
+# Discovery (test/mac/discover.sh) ran on 29 Oct; results in the vault. No secrets, read-only token, nothing published.
 name: mac-e2e
 
 on:
@@ -15,7 +16,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  discover:
+  e2e:
     strategy:
       fail-fast: false
       matrix:
@@ -32,5 +33,5 @@ jobs:
       - name: Bundle sox + ffmpeg (pinned and checksummed)
         run: scripts/mac-deps.sh
       - run: npm ci --no-audit --no-fund
-      - name: Discovery (audio devices, fake camera, hidden-window stall, H264)
-        run: test/mac/discover.sh
+      - name: Video show with the window minimized, hidden and on another Space
+        run: test/mac/e2e.sh
