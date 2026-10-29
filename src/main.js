@@ -441,27 +441,26 @@ function buildTeeArgs(profiles, quality, audioDevice, videoDevice, audioOnly, vo
 }
 
 // ─── Window ───────────────────────────────────────────────────────────────────
-async function requestMediaPermissions() {
-  if (process.platform !== 'darwin') return;
+// 1.6.2 (Mac test, 29 Oct): the page waits for this before it opens the camera or the mic (IPC media-access). The
+// camera was allowed while the page was already opening it: Chromium's capture failed ("Could not start video
+// source") and stayed failed until the app was reopened. Asked one at a time, only while macOS hasn't asked yet.
+// Never asked under Chromium's fake devices (the Mac e2e on CI), where a prompt would wait forever.
+let mediaAccess = Promise.resolve({});
+function requestMediaPermissions() {
+  if (process.platform !== 'darwin' || app.commandLine.hasSwitch('use-fake-ui-for-media-stream')) return;
   const { systemPreferences } = require('electron');
-  try {
-    // Don't await — fire and forget so we never block or throw before window is ready
-    const micStatus = systemPreferences.getMediaAccessStatus('microphone');
-    if (micStatus !== 'granted') {
-      systemPreferences.askForMediaAccess('microphone')
-        .then(g => console.log('[permissions] microphone:', g ? 'granted' : 'denied'))
-        .catch(e => console.warn('[permissions] mic error:', e.message));
+  mediaAccess = (async () => {
+    const out = {};
+    for (const t of ['microphone', 'camera']) {
+      try {
+        if (systemPreferences.getMediaAccessStatus(t) === 'not-determined') await systemPreferences.askForMediaAccess(t);
+        out[t] = systemPreferences.getMediaAccessStatus(t);
+      } catch (e) { out[t] = 'error'; console.warn('[permissions]', t, e.message); } // never let it crash the app
     }
-    const camStatus = systemPreferences.getMediaAccessStatus('camera');
-    if (camStatus !== 'granted') {
-      systemPreferences.askForMediaAccess('camera')
-        .catch(e => console.warn('[permissions] cam error:', e.message));
-    }
-  } catch(e) {
-    console.warn('[permissions] error:', e.message);
-    // Never rethrow — a permissions error must never crash the app
-  }
+    return out;
+  })();
 }
+ipcMain.handle('media-access', () => mediaAccess);
 
 // Window controls per OS (1.5.0): macOS keeps its real traffic lights over our header, Windows gets its native
 // caption buttons drawn on the dark header, Linux uses the desktop's own frame (Hyprland draws none). Until 1.4.0
@@ -610,7 +609,7 @@ app.whenReady().then(() => {
   // Create window immediately — never await anything before this
   createWindow();
   try { createTray(); } catch(e) {}
-  // Request permissions after window exists (fire and forget)
+  // Ask for camera + mic after the window exists; the page waits for the answer (media-access) before opening them
   requestMediaPermissions();
 });
 

@@ -747,6 +747,10 @@ function findFfDevice(label, list) {
 async function populateDevices() {
   try {
     teardown();
+    // macOS: wait until the camera and mic questions are answered, so Chromium never opens a device mid-prompt (1.6.2).
+    const access = await window.grooveline.mediaAccess().catch(() => ({}));
+    if (access.camera === 'denied' || access.camera === 'restricted') addLog('The camera is off for this app in macOS. Allow Grooveline Broadcaster in System Settings › Privacy & Security › Camera, then reopen the app.', 'warn');
+    if (access.microphone === 'denied' || access.microphone === 'restricted') addLog('The microphone is off for this app in macOS. Allow Grooveline Broadcaster in System Settings › Privacy & Security › Microphone, then reopen the app.', 'error');
     // Device names need one permission grant; after that they are listed without opening anything. Skip the probe
     // then (1.6.0): every open and close is a start and stop on the camera.
     const pre = await navigator.mediaDevices.enumerateDevices().catch(() => []);

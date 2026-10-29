@@ -72,7 +72,7 @@ torn down and relaunched with backoff 2/4/8/15/30 s.
 - **403 "Mountpoint in use" = keep trying every 15 s**: after a drop, the dead
   connection holds the mount until Icecast's source-timeout (600 s on Grooveline).
 - 401 / audio device / encoder: give up after 3 in a row (`stream-stopped` with a reason).
-- The macOS canvas-video path is not supervised (webm can't restart mid-stream).
+- The macOS canvas-video path is supervised since 1.6.2 (each launch asks the page for a new MediaRecorder).
 - Renderer shows RECONNECTING with a banner (stage text + How to fix) via `stream-reconnecting` / `stream-reconnected`.
 - Reports to `POST /setup/report` (app_live, app_error, app_reconnecting,
   app_reconnected, app_gave_up) when the DJ is logged in (`_acctToken` in config).
@@ -275,3 +275,33 @@ See grooveline memory file for full context.
   rtmp window, and `/live` never sees it: no site switch, no recording, no posts. `start-stream` allows a soundCheck
   only to `/check-*` (audio) or `rtmp://46.224.177.15:1935/live/vcheck-…` (video). "Received" = `check-video-status`
   (HLS playlist 200). Tested end to end on 22 Oct with Zé's account: playlist 200, /watch played, `/live` stayed false.
+
+### 1.6.2 (29 Oct 2026, from the Mac test on the Samsung-stick handoff)
+- **Hidden window froze Mac video:** Chromium paused the page (rVFC/rAF draw loop, timers at 1 Hz) when the window was
+  minimized, hidden or on another Space; ffmpeg waited for video, the sound stopped too, MediaMTX cut after 60 s. Now
+  `backgroundThrottling: false`, `disable-renderer-backgrounding`, `disable-backgrounding-occluded-windows`,
+  `CalculateNativeWinOcclusion` in the one `disable-features` switch (a second switch replaces the first), and
+  `powerSaveBlocker('prevent-app-suspension')` while live (`liveSession.noSuspend`). The April fix (setInterval loop,
+  `5d2d745`) was lost in the 4 May restore and wasn't enough anyway (1 frame/s when hidden).
+- **Mac video supervised:** `startVideoStream` tags its procs, feeds `superviseLine`, calls `pipelineExited`. Each launch
+  bumps `videoRecorderGen` and sends `video-recorder-restart`; the page starts a new MediaRecorder on the canvas stream
+  (`startVideoRecorder(gen)`), and `video-chunk` drops chunks of any other generation, so every ffmpeg gets a webm
+  stream from its header on. The page no longer starts a recorder in `startCanvasCapture`.
+- **Lost stream slave:** `Slave muxer #0 failed` (slave #0 of the tee is always the stream) → stage network → relaunch,
+  every OS. ffmpeg used to continue with the local recording only and keep reporting progress: ON AIR, nothing sent.
+- **Camera track ended** (page) → `video-source-ended` → stage camera → radio fallback; the page stops its capture on
+  `stream-fallback`.
+- **sox → ffmpeg fd3:** sox starts with ffmpeg; main writes its stdout to fd3 without backpressure, up to
+  `SOX_BUFFER_S` (20 s) queued, so sox is always read while ffmpeg probes the webm. Drops show in the `[mac video]` line.
+- **Permissions:** `requestMediaPermissions` asks mic then camera only while `not-determined`; the page awaits
+  `media-access` in `populateDevices` before any `getUserMedia`. Skipped under `--use-fake-ui-for-media-stream`.
+- **Mac e2e on GitHub's Macs** (`.github/workflows/mac-e2e.yml`, `test/mac/e2e.sh`, `test/mac/e2e/freeze.mjs`): packaged
+  app, Chromium's fake camera, BlackHole as default input, MediaMTX v1.4.0 with production's timeouts; a video show
+  minimized, hidden, on another fullscreen Space, then a MediaMTX restart. Runs 1.6.1's `src/` (baseline, must fail) next
+  to the current code (must pass) on macOS 15 arm64, 15 Intel and 26 arm64. **Never drive visibility tests with
+  Playwright:** it turns on focus emulation, which keeps a hidden page running (the first e2e passed on 1.6.1). The harness
+  uses Node's inspector in the main process and `webContents.executeJavaScript`. Results are `::notice` annotations.
+- **Native Apple Silicon tools** (`scripts/mac-tools-arm64.sh`, job `arm64-tools`): ffmpeg 9.0.2 (Martin Riedl static,
+  minos 12.0) and sox 14.4.2 built from source (CoreAudio + raw only); both arm64-only and system-libraries-only. Not
+  wired into the app yet: `bin/mac` is still x86_64 (Rosetta).
+

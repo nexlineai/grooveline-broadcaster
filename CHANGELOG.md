@@ -2,6 +2,14 @@
 
 The app shows the sections newer than the version you had before under "What's new" the first time it opens.
 
+## 1.6.2
+
+- Mac video shows keep going when the app window is hidden, minimized or on another desktop. Before, the picture froze within seconds, the sound stopped with it, and Grooveline ended the show a minute later.
+- If the connection to Grooveline's video server drops, the app shows RECONNECTING and gets back on air by itself. Before, it could keep saying ON AIR while nothing reached the server.
+- Mac: if the camera stops during a video show (unplugged, or taken by another app), your sound goes to the radio instead of stopping.
+- Mac: the first seconds of a video show no longer lose sound.
+- Mac: the first time you open the app, it waits for you to allow the camera and microphone before it uses them, so the camera works without reopening the app.
+
 ## 1.6.1
 
 - Mac: "Default input" now streams your Mac's default input. 1.6.0 could pick another device (a silent loopback driver) while the preview looked fine.
