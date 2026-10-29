@@ -29,8 +29,10 @@ contextBridge.exposeInMainWorld('grooveline', {
 
   // PCM pipe — renderer sends raw audio chunks, main pipes to ffmpeg stdin
   sendPcmChunk: (buffer) => ipcRenderer.send('pcm-chunk', Buffer.from(buffer)),
-  // Video pipe — renderer sends raw RGBA canvas frames, main pipes to ffmpeg stdin
-  sendVideoChunk: (buffer) => ipcRenderer.send('video-chunk', Buffer.from(buffer)),
+  // Video pipe (macOS) — webm chunks of the page's MediaRecorder; gen = the recorder main asked for (1.6.2)
+  sendVideoChunk: (buffer, gen) => ipcRenderer.send('video-chunk', Buffer.from(buffer), gen),
+  onVideoRecorderRestart: (cb) => ipcRenderer.on('video-recorder-restart', (_, data) => cb(data)),
+  videoSourceEnded: () => ipcRenderer.send('video-source-ended'),
   startPcmStream: (opts) => ipcRenderer.invoke('start-pcm-stream', opts),
   stopPcmStream: () => ipcRenderer.invoke('stop-pcm-stream'),
 

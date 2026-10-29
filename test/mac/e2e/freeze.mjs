@@ -102,6 +102,28 @@ await run('fullscreen-space', async () => {
   await a.evalMain('electron.BrowserWindow.getAllWindows().filter(b => b._e2eOther).forEach(b => b.destroy()); return true;');
   await sleep(2000); await win('x.setFullScreen(false)');
 });
+// The video server restarts mid-show (what a dropped connection looks like): the app must notice and reconnect.
+// 1.6.1 kept recording locally, said ON AIR, and the server got nothing until STOP.
+let reconnect = null;
+if (process.env.MTX_PID_FILE) {
+  phase = 'server-restart';
+  const pid = +fs.readFileSync(process.env.MTX_PID_FILE, 'utf8');
+  try { process.kill(pid); } catch {}
+  await sleep(3000);
+  const m = spawn(process.env.MTX_BIN, [process.env.MTX_CONF], { stdio: ['ignore', fs.openSync(process.env.MTX_LOG, 'a'), fs.openSync(process.env.MTX_LOG, 'a')], detached: true });
+  fs.writeFileSync(process.env.MTX_PID_FILE, String(m.pid)); m.unref();
+  const t0 = Date.now(); let back = false, b0 = null;
+  const statuses = new Set();
+  while (Date.now() - t0 < 75000) {
+    statuses.add(await status());
+    const x = await mtx();
+    if (x.ready) { if (b0 === null) b0 = x.bytes; else if (x.bytes - b0 > 100 * 1024) { back = true; break; } }
+    await sleep(2500);
+  }
+  reconnect = { back, secs: Math.round((Date.now() - t0) / 1000), statuses: [...statuses] };
+  phase = 'after-restart';
+  await sleep(15000);
+}
 clearInterval(sampler);
 const finalStatus = await status();
 await a.evalPage("document.getElementById('btn-go-live').click(); true");
@@ -115,11 +137,13 @@ const logFile = path.join(userData, 'logs', 'broadcaster.log');
 const log = fs.existsSync(logFile) ? fs.readFileSync(logFile, 'utf8') : '';
 const drops = log.split('\n').filter(l => /\[mac video\]/.test(l)).map(l => +(l.match(/dropped audio (\d+)/) || [0, 0])[1]);
 const problems = log.split('\n').filter(l => /Slave muxer|End of file|Broken pipe|video stopped|lost the connection/i.test(l)).slice(0, 5).map(l => l.slice(0, 160));
-const stalled = Object.entries(summary).filter(([p, s]) => !p.endsWith('-leave') && s.minKB5s < 20).map(([p]) => p);
+const stalled = Object.entries(summary).filter(([p, s]) => !p.endsWith('-leave') && p !== 'server-restart' && s.minKB5s < 20).map(([p]) => p);
+if (reconnect && !reconnect.back) stalled.push('server-restart (no reconnect)');
 for (const [p, s] of Object.entries(summary)) if (!p.endsWith('-leave')) note('phase ' + p, `min ${s.minKB5s} kB / 5 s, max ${s.maxKB5s} (${s.n} samples)`);
 note('audio', `sox dropped per 10 s: ${drops.join(',') || 'no [mac video] lines'} · status at the end "${finalStatus}" · ${problems.join(' | ') || 'no muxer errors'}`);
+if (reconnect) note('server restart', `${reconnect.back ? 'back on the server' : 'NOT back'} after ${reconnect.secs} s · app said: ${reconnect.statuses.join(' / ')}`);
 note('verdict', stalled.length ? `STALLED in: ${stalled.join(', ')}` : 'video kept flowing in every phase');
-console.log('RESULT ' + JSON.stringify({ version, summary, drops, finalStatus, problems, stalled }));
+console.log('RESULT ' + JSON.stringify({ version, summary, drops, finalStatus, problems, reconnect, stalled }));
 if (log) fs.writeFileSync(path.join(OUT, 'app-log.txt'), log);
 await a.quit();
 process.exit(stalled.length ? 1 : 0);

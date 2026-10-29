@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage, dialog, powerSaveBlocker } = require('electron');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
 const fs = require('fs');
@@ -6,7 +6,13 @@ const os = require('os');
 
 // Disable Chromium's camera capture service — we use ffmpeg/AVFoundation directly.
 // Without this, Chromium's media process holds the camera device and blocks AVFoundation.
-app.commandLine.appendSwitch('disable-features', 'MediaFoundationVideoCapture,HardwareMediaKeyHandling');
+// 1.6.2 (Mac test, 29 Oct): the page must keep running when the window is minimized, hidden or on another Space. The
+// Mac's video comes from the page (camera → canvas → MediaRecorder); when Chromium paused it, ffmpeg waited for video,
+// the sound stopped with it, and the server cut the show 60 s later. CalculateNativeWinOcclusion is Chromium's
+// "window is covered" tracking. One disable-features switch only: a second one replaces the first.
+app.commandLine.appendSwitch('disable-features', 'MediaFoundationVideoCapture,HardwareMediaKeyHandling,CalculateNativeWinOcclusion');
+app.commandLine.appendSwitch('disable-renderer-backgrounding');
+app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
 
 // Prevent broken pipe (EPIPE) from crashing the main process.
 // This happens when sox/ffmpeg pipes close unexpectedly during streaming.
@@ -479,6 +485,7 @@ function createWindow() {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
+      backgroundThrottling: false, // 1.6.2: timers and frame callbacks keep running when the window is out of sight
       preload: path.join(__dirname, 'preload.js')
     },
     icon: process.platform === 'darwin'
@@ -662,6 +669,7 @@ let liveSession = null;
 const RETRY_DELAYS_S = [2, 4, 8, 15, 30];
 const STALL_MS = 15000;        // progress lines stopped → the path is dead
 const FIRST_DATA_MS = 30000;   // a launch that never starts sending
+const SOX_BUFFER_S = 20;        // Mac video: audio main holds for ffmpeg while it probes the camera's webm
 const HEALTHY_MS = 20000;      // sending this long → reset the failure counters
 const AUTH_GRACE_MS = 120000;  // 401s are expected while a new mount syncs (1-min cron)
 // Video (1.6.0): every relaunch reopens the camera, and facetimehd wedged on 21 Oct after a reopen every few seconds.
@@ -743,6 +751,13 @@ function progressConfirmed(s) {
 function superviseLine(proc, line) {
   const s = liveSession;
   if (!s || proc._gen !== s.gen) return;
+  // Slave #0 of the tee is always the stream. When it fails, ffmpeg carries on with the local recording only and keeps
+  // reporting progress, so the show looked ON AIR while the server had cut it (Mac test, 29 Oct).
+  if (/Slave muxer #0 failed/.test(line) && !s.tearingDown) {
+    s.stage = 'network'; s.lastLine = line;
+    scheduleRestart('the connection to the server was lost');
+    return;
+  }
   if (line.includes('size=') || line.includes('time=')) {
     const t = (line.match(/time=\s*(\S+)/) || [])[1];
     if (t && t === s.lastTime) return; // a repeated report is not progress
@@ -940,6 +955,7 @@ function endLiveSession() {
   if (!s) return;
   if (s.watchdog) clearInterval(s.watchdog);
   if (s.restartTimer) clearTimeout(s.restartTimer);
+  if (s.noSuspend != null && powerSaveBlocker.isStarted(s.noSuspend)) powerSaveBlocker.stop(s.noSuspend);
   liveSession = null;
 }
 
@@ -1201,7 +1217,10 @@ function startVideoStream(event, ffmpeg, profiles, quality, audioDeviceName, vol
 
   // 1.6.1 (Mac test, 22 Oct): sox used to start first, while ffmpeg still probed the camera's webm (about 6 s). The
   // pipe filled, CoreAudio dropped audio ("unhandled buffer overrun", 1012 times in one live minute), and the show
-  // file came out short. Now ffmpeg starts first and sox only once ffmpeg has opened its video input ("Input #0").
+  // file came out short. 1.6.1 started sox only once ffmpeg had opened its video input ("Input #0"), but every show
+  // still dropped 30–80 buffers in its first 20 s (Mac test, 29 Oct), and the sound then began seconds after the video.
+  // 1.6.2: sox and the page's recorder both start with ffmpeg, and main buffers sox's audio (up to SOX_BUFFER_S) while
+  // ffmpeg probes the video, so sox is always read and both inputs begin at the same moment.
   // Every 10 s one tech line says how fast ffmpeg runs and how often sox dropped audio, so a slow Mac shows itself.
   let cmd = ffmpeg, spawnArgs = args;
   if (process.platform !== 'win32') {
@@ -1209,53 +1228,62 @@ function startVideoStream(event, ffmpeg, profiles, quality, audioDeviceName, vol
     spawnArgs = ['-n', '-10', ffmpeg, ...args];
   }
   // stdio: [stdin=video pipe, stdout=pipe, stderr=pipe, fd3=audio from sox]
-  const proc = spawn(cmd, spawnArgs, { stdio: ['pipe', 'pipe', 'pipe', 'pipe'] });
+  const proc = tagProc(spawn(cmd, spawnArgs, { stdio: ['pipe', 'pipe', 'pipe', 'pipe'] }));
+  proc.stdin.on('error', () => {}); // stdin is the video pipe, so STOP ends this ffmpeg with SIGTERM, not 'q'
   videoFfmpegProc = proc;
   activeProcesses.push(proc);
   attachMeterTap(proc, event.sender);
   proc.stdio[3].on('error', () => {});
+  // A new recorder in the page for this ffmpeg: its first chunk carries the webm header.
+  videoRecorderGen++;
+  safeSend(event.sender, 'video-recorder-restart', { gen: videoRecorderGen });
 
-  let soxProc = null, overruns = 0, lastProgress = '';
-  const startSox = () => {
-    if (soxProc || proc.exitCode !== null) return;
-    safeSend(event.sender, 'stream-log', { type: 'info', msg: `Starting sox — device: "${audioDeviceName}"`, tech: true });
-    soxProc = spawn(sox, soxArgs);
-    videoSoxProc = soxProc;
-    activeProcesses.push(soxProc);
-    soxProc.stderr.on('data', d => {
-      d.toString().split('\n').map(l => l.trim()).filter(Boolean).forEach(line => {
-        if (/buffer overrun/i.test(line)) { overruns++; return; } // counted, reported every 10 s
-        safeSend(event.sender, 'stream-log', { type: 'info', msg: `[sox] ${line}`, tech: true });
-      });
+  let overruns = 0, lastProgress = '', bufferDrops = 0;
+  const audioOut = proc.stdio[3];
+  const maxBuffered = SOX_BUFFER_S * sampleRate * soxChannels * 2;
+  safeSend(event.sender, 'stream-log', { type: 'info', msg: `Starting sox — device: "${audioDeviceName}"`, tech: true });
+  const soxProc = tagProc(spawn(sox, soxArgs));
+  videoSoxProc = soxProc;
+  activeProcesses.push(soxProc);
+  soxProc.stdout.on('data', d => {
+    if (audioOut.destroyed) return;
+    if (audioOut.writableLength > maxBuffered) { bufferDrops++; return; } // ffmpeg stopped reading: don't grow forever
+    audioOut.write(d);
+  });
+  soxProc.stderr.on('data', d => {
+    d.toString().split('\n').map(l => l.trim()).filter(Boolean).forEach(line => {
+      if (/buffer overrun/i.test(line)) { overruns++; return; } // counted, reported every 10 s
+      superviseLine(soxProc, line);
+      safeSend(event.sender, 'stream-log', { type: 'info', msg: `[sox] ${line}`, tech: true });
     });
-    soxProc.on('error', e => safeSend(event.sender, 'stream-log', { type: 'error', msg: `[sox] ${e.message}`, tech: true }));
-    soxProc.on('close', (code) => {
-      const idx = activeProcesses.indexOf(soxProc);
-      if (idx > -1) activeProcesses.splice(idx, 1);
-      if (videoSoxProc === soxProc) videoSoxProc = null;
-      if (isStreaming) {
-        safeSend(event.sender, 'stream-log', { type: 'error', msg: `[sox] Exited (code ${code}) — audio device "${audioDeviceName}" may not be available.` });
-        try { if (videoFfmpegProc) videoFfmpegProc.kill('SIGTERM'); } catch {}
-      }
-    });
-    soxProc.stdout.pipe(proc.stdio[3]);
-  };
-  const soxFallback = setTimeout(startSox, 15000); // ffmpeg never said "Input #0": start anyway, the log shows why
+  });
+  soxProc.on('error', e => safeSend(event.sender, 'stream-log', { type: 'error', msg: `[sox] ${e.message}`, tech: true }));
+  soxProc.on('close', (code) => {
+    const idx = activeProcesses.indexOf(soxProc);
+    if (idx > -1) activeProcesses.splice(idx, 1);
+    if (videoSoxProc === soxProc) videoSoxProc = null;
+    if (liveSession && soxProc._gen === liveSession.gen && !liveSession.tearingDown) {
+      liveSession.stage = liveSession.stage || 'device'; liveSession.lastLine = liveSession.lastLine || `sox exited (code ${code})`;
+      safeSend(event.sender, 'stream-log', { type: 'error', msg: `[sox] Exited (code ${code}) — audio device "${audioDeviceName}" may not be available.` });
+      try { proc.kill('SIGTERM'); } catch {} // the supervisor relaunches both from ffmpeg's exit
+    }
+  });
   const health = setInterval(() => {
     if (proc.exitCode !== null) return;
     const t = (lastProgress.match(/time=\s*(\S+)/) || [])[1], sp = (lastProgress.match(/speed=\s*(\S+)/) || [])[1];
-    safeSend(event.sender, 'stream-log', { type: overruns ? 'warn' : 'info', tech: true,
-      msg: `[mac video] ffmpeg time=${t || '?'} speed=${sp || '?'} · sox dropped audio ${overruns}× in the last 10 s` });
-    overruns = 0;
+    safeSend(event.sender, 'stream-log', { type: overruns || bufferDrops ? 'warn' : 'info', tech: true,
+      msg: `[mac video] ffmpeg time=${t || '?'} speed=${sp || '?'} · sox dropped audio ${overruns}× in the last 10 s` +
+        (bufferDrops ? ` · ${bufferDrops} audio blocks dropped, ffmpeg not reading` : '') });
+    overruns = 0; bufferDrops = 0;
   }, 10000);
-  proc.on('close', () => { clearTimeout(soxFallback); clearInterval(health); });
 
   proc.stderr.on('data', (data) => {
     const lines = data.toString().split(/[\r\n]+/).filter(l => l.trim());
     lines.forEach(line => {
-      if (/^Input #0/.test(line.trim())) { clearTimeout(soxFallback); startSox(); }
+      superviseLine(proc, line);
       if (line.includes('size=') || line.includes('time=')) {
         lastProgress = line;
+        if (liveSession && proc._gen === liveSession.gen && !progressConfirmed(liveSession)) return;
         const match = line.match(/bitrate=\s*([\d.]+)kbits/);
         safeSend(event.sender, 'stream-stats', { bitrate: match ? match[1] : null });
       } else if (line.match(/error|Error|failed|Broken pipe/i) && !line.includes('Qavg')) {
@@ -1266,22 +1294,35 @@ function startVideoStream(event, ffmpeg, profiles, quality, audioDeviceName, vol
     });
   });
   proc.on('close', (code) => {
+    clearInterval(health);
+    try { soxProc.kill('SIGTERM'); } catch {}
     const idx = activeProcesses.indexOf(proc);
     if (idx > -1) activeProcesses.splice(idx, 1);
     if (videoFfmpegProc === proc) videoFfmpegProc = null;
+    if (pipelineExited(proc, code)) return;
     if (isStreaming && activeProcesses.filter(p => !p.killed).length === 0) {
       isStreaming = false;
       safeSend(event.sender, 'stream-stopped', {});
-      finishShowRecording(liveSession); // unsupervised: the show ended without STOP
     }
   });
   safeSend(event.sender, 'stream-log', { type: 'success', msg: '✓ Video stream started (sox audio + canvas video)', tech: true });
   return proc;
 }
 
-// Receive raw RGBA video frames from renderer canvas and pipe to ffmpeg stdin
-ipcMain.on('video-chunk', (_, buffer) => {
+// The page's camera track ended while live (unplugged, taken by another app, permission revoked).
+ipcMain.on('video-source-ended', () => {
+  const s = liveSession;
+  if (!s || s.tearingDown || !isVideoSession(s)) return;
+  s.stage = 'camera'; s.lastLine = 'the camera stopped sending';
+  scheduleRestart('the camera stopped');
+});
+
+// Webm chunks from the page's MediaRecorder → ffmpeg stdin. Only chunks of the recorder this ffmpeg asked for
+// (videoRecorderGen) count: a new ffmpeg must get a webm stream from its header on.
+let videoRecorderGen = 0;
+ipcMain.on('video-chunk', (_, buffer, gen) => {
   try {
+    if (gen !== videoRecorderGen) return;
     if (videoFfmpegProc && videoFfmpegProc.stdin && !videoFfmpegProc.stdin.destroyed) {
       const buf = buffer instanceof Buffer ? buffer : Buffer.from(buffer);
       videoFfmpegProc.stdin.write(buf);
@@ -1370,13 +1411,15 @@ ipcMain.handle('start-stream', async (event, opts) => {
   liveSession = {
     event, sender: event.sender, opts, gen: 1, attempt: 0, sameStageFails: 0, prevStage: null, sessionStart: Date.now(),
     soundCheck: !!opts.soundCheck,
-    // The macOS canvas-video path can't be relaunched mid-stream (the renderer's
-    // webm stream has no header after a restart) — it keeps the old behaviour.
-    supervise: !(process.platform === 'darwin' && hasRtmp && !opts.audioOnly),
+    // 1.6.2: the macOS canvas-video path is supervised too. Every launch asks the page for a new MediaRecorder
+    // (video-recorder-restart), so each ffmpeg gets a webm stream from its header on.
+    supervise: true,
     launchedAt: Date.now(), lastProgress: 0, stage: null, lastLine: '', firstProgressAt: 0, confirmed: false,
     showRec: !opts.audioOnly && !opts.soundCheck && opts.recordFolder
       ? { folder: opts.recordFolder, base: `grooveline-show-${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}`, parts: [] } : null,
     showProcs: [],
+    // 1.6.2: macOS App Nap slows a hidden app; no nap while live (the display may still sleep).
+    noSuspend: powerSaveBlocker.start('prevent-app-suspension'),
   };
   const needAudioName = !opts.audioDeviceName || opts.audioDeviceName === 'default';
   if (process.platform === 'win32' && (needAudioName || !opts.audioOnly)) {

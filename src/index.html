@@ -628,8 +628,10 @@ function bindStreamEvents() {
     reconnect = { attempt, delay, stage, message, at: Date.now() }; onAir = false; lastBitrate = null; refreshUI();
   });
   window.grooveline.onStreamReconnected(() => { reconnect = null; onAir = true; refreshUI(); });
+  window.grooveline.onVideoRecorderRestart(({ gen }) => startVideoRecorder(gen));
   window.grooveline.onStreamFallback(() => {
     liveOnRadioFallback = true;
+    stopCanvasCapture(); // macOS: the page's camera is no longer on air
     if (recModeNow === 'show') {
       isRecording = false; recModeNow = null; clearInterval(recTimerInterval); setRecordingUI(false);
       addLog('The video recording stops here: the show is on the radio only. What was recorded is saved when you press STOP. Press REC to record the radio audio.', 'warn');
@@ -932,6 +934,7 @@ function stopCanvasCapture() {
   }
   if (canvasCapStream) {
     if (canvasCapStream._mediaRecorder) { try { canvasCapStream._mediaRecorder.stop(); } catch {} canvasCapStream._mediaRecorder = null; }
+    if (canvasCapStream._capture) canvasCapStream._capture.getTracks().forEach(t => t.stop());
     canvasCapStream.getTracks().forEach(t => t.stop());
     canvasCapStream = null;
   }
@@ -969,13 +972,24 @@ async function startCanvasCapture(videoDeviceId, quality) {
     const drawLoop = ts => { canvasCapAF = requestAnimationFrame(drawLoop); if (ts - lastFrame < frameInterval) return; lastFrame = ts; try { canvasCapCtx.drawImage(canvasCapVideo, 0, 0, w, h); } catch(e) {} };
     canvasCapAF = requestAnimationFrame(drawLoop);
   }
+  canvasCapStream._capture = captureStream;
+  // 1.6.2: a camera that stops while live (unplugged, taken by another app) is reported, so main can switch the
+  // show to the radio instead of sending a frozen picture and no sound.
+  canvasCapStream.getVideoTracks().forEach(t => t.addEventListener('ended', () => { if (isLive) window.grooveline.videoSourceEnded(); }));
+  addLog(`Camera capture started: ${w}x${h} @ ${fps}fps`, 'success', { tech: true });
+  return true;
+}
+// The recorder starts when main has started the ffmpeg that reads it (video-recorder-restart, 1.6.2), and again for
+// every relaunch: each ffmpeg needs a webm stream from its header on. gen tags the chunks so main drops old ones.
+function startVideoRecorder(gen) {
+  if (!canvasCapStream || !canvasCapStream._capture) return;
+  if (canvasCapStream._mediaRecorder) { try { canvasCapStream._mediaRecorder.stop(); } catch {} }
   const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp8') ? 'video/webm;codecs=vp8' : 'video/webm';
-  const mr = new MediaRecorder(captureStream, { mimeType, videoBitsPerSecond: parseInt(cfg.quality.videoBitrate || '1000k') * 1000 });
-  mr.ondataavailable = e => { if (e.data && e.data.size > 0) e.data.arrayBuffer().then(buf => window.grooveline.sendVideoChunk(buf)); };
+  const mr = new MediaRecorder(canvasCapStream._capture, { mimeType, videoBitsPerSecond: parseInt(cfg.quality.videoBitrate || '1000k') * 1000 });
+  mr.ondataavailable = e => { if (e.data && e.data.size > 0) e.data.arrayBuffer().then(buf => window.grooveline.sendVideoChunk(buf, gen)); };
   mr.start(100);
   canvasCapStream._mediaRecorder = mr;
-  addLog(`Camera capture started: ${w}x${h} @ ${fps}fps (${mimeType})`, 'success', { tech: true });
-  return true;
+  addLog(`Video recorder ${gen} started (${mimeType})`, 'info', { tech: true });
 }
 
 // The preview runs whenever the app isn't live: it drives the meters (same channel pair and volume as the stream)

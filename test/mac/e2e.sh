@@ -7,6 +7,8 @@ note() { echo "::notice title=$1::$2"; }
 ARCH=$(uname -m); [ "$ARCH" = arm64 ] && { EB=--arm64; APP="dist/mac-arm64/Grooveline Broadcaster.app"; MTX=arm64; SUM=26bd1e8b29faf4677ba00afaeb395b02c67615e13983d5e2511318aae0e36a3b; } \
   || { EB=--x64; APP="dist/mac/Grooveline Broadcaster.app"; MTX=amd64; SUM=cf20e0f0d998e89c1176ea9a6888622ad72a30da06a3f2b61f9d26e003b3637b; }
 W=$RUNNER_TEMP/e2e; mkdir -p "$W"
+# VARIANT=baseline builds 1.6.1's src/ (the release on main), to show the test still catches the bug.
+[ "${VARIANT:-fix}" = baseline ] && { git fetch -q --depth 1 origin 6fb675e && git checkout 6fb675e -- src/ || exit 1; }
 
 CSC_IDENTITY_AUTO_DISCOVERY=false npx electron-builder --mac dir $EB --publish never >"$W/build.log" 2>&1 || { tail -30 "$W/build.log"; exit 1; }
 codesign --force --deep --sign - "$APP"
@@ -21,9 +23,11 @@ echo "$SUM  $W/mtx.tgz" | shasum -a 256 -c >/dev/null || { echo "::error::mediam
 tar xzf "$W/mtx.tgz" -C "$W" mediamtx
 printf 'logLevel: info\nreadTimeout: 60s\nwriteTimeout: 60s\napi: yes\napiAddress: 127.0.0.1:9997\nrtmp: yes\nrtmpAddress: :1935\nhls: no\nrtsp: no\nwebrtc: no\nsrt: no\npaths:\n  all_others:\n' > "$W/mediamtx.yml"
 "$W/mediamtx" "$W/mediamtx.yml" >"$W/mediamtx.log" 2>&1 &
+echo $! > "$W/mtx.pid"
+export MTX_PID_FILE="$W/mtx.pid" MTX_BIN="$W/mediamtx" MTX_CONF="$W/mediamtx.yml" MTX_LOG="$W/mediamtx.log"
 sleep 2
 
-note input "default input: $(SwitchAudioSource -t input -c) · $(sw_vers -productVersion) $ARCH"
+note input "${VARIANT:-fix} · default input: $(SwitchAudioSource -t input -c) · $(sw_vers -productVersion) $ARCH"
 node test/mac/e2e/freeze.mjs "$APP/Contents/MacOS/Grooveline Broadcaster" "$W/out"; RC=$?
 note mediamtx "$(grep -E 'is publishing|closed|timeout' "$W/mediamtx.log" | sed 's/^[0-9/ :]*//' | tail -6 | tr '\n' ' ' | cut -c1-900)"
 exit $RC
