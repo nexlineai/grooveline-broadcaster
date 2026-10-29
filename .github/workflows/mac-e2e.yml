@@ -6,7 +6,7 @@ name: mac-e2e
 on:
   workflow_dispatch:
   push:
-    branches: [mac-e2e]
+    branches: [main, mac-e2e]
 
 permissions:
   contents: read
@@ -21,7 +21,8 @@ jobs:
       fail-fast: false
       matrix:
         os: [macos-15, macos-15-intel, macos-26]
-        variant: [fix, baseline]
+        # The baseline (1.6.1's src/, must fail) runs only on the test branch, so main stays a plain regression gate.
+        variant: ${{ fromJSON(github.ref == 'refs/heads/main' && '["fix"]' || '["fix","baseline"]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 40
     steps:
@@ -42,6 +43,7 @@ jobs:
   # Native Apple Silicon ffmpeg + sox for the arm64 app: proof they are arm64-only, system-libraries-only, have what
   # the app uses, and that sox records from CoreAudio. Hosting them for mac-deps.sh is Zé's call.
   arm64-tools:
+    if: github.ref != 'refs/heads/main'
     runs-on: macos-15
     timeout-minutes: 30
     steps:

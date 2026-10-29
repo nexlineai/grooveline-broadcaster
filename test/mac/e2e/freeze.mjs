@@ -132,17 +132,22 @@ await sleep(6000);
 // Per phase: the smallest growth between two samples 5 s apart. A stalled show sends ~0.
 const byPhase = {};
 for (let i = 1; i < samples.length; i++) (byPhase[samples[i].phase] ||= []).push(Math.round((samples[i].bytes - samples[i - 1].bytes) / 1024));
-const summary = Object.fromEntries(Object.entries(byPhase).map(([p, v]) => [p, { minKB5s: Math.min(...v), maxKB5s: Math.max(...v), n: v.length }]));
+const median = v => { const a = [...v].sort((x, y) => x - y); return a.length ? a[Math.floor(a.length / 2)] : 0; };
+const summary = Object.fromEntries(Object.entries(byPhase).map(([p, v]) => [p, { minKB5s: Math.min(...v), medianKB5s: median(v), maxKB5s: Math.max(...v), n: v.length }]));
+// A phase passes when nothing stalls (every 5 s ≥ 20 kB) and it keeps ≥ 70 % of the visible phase's median rate.
+// 1.6.1 on CI: minimized fell to 0, hidden and fullscreen-space to about 40 % (Zé's freeze was a fullscreen-Space switch).
+const visibleMedian = (summary.visible || {}).medianKB5s || 0;
 const logFile = path.join(userData, 'logs', 'broadcaster.log');
 const log = fs.existsSync(logFile) ? fs.readFileSync(logFile, 'utf8') : '';
 const drops = log.split('\n').filter(l => /\[mac video\]/.test(l)).map(l => +(l.match(/dropped audio (\d+)/) || [0, 0])[1]);
 const problems = log.split('\n').filter(l => /Slave muxer|End of file|Broken pipe|video stopped|lost the connection/i.test(l)).slice(0, 5).map(l => l.slice(0, 160));
-const stalled = Object.entries(summary).filter(([p, s]) => !p.endsWith('-leave') && p !== 'server-restart' && s.minKB5s < 20).map(([p]) => p);
+const stalled = Object.entries(summary).filter(([p, s]) => !p.endsWith('-leave') && p !== 'server-restart'
+  && (s.minKB5s < 20 || (p !== 'visible' && s.medianKB5s < 0.7 * visibleMedian))).map(([p]) => p);
 if (reconnect && !reconnect.back) stalled.push('server-restart (no reconnect)');
-for (const [p, s] of Object.entries(summary)) if (!p.endsWith('-leave')) note('phase ' + p, `min ${s.minKB5s} kB / 5 s, max ${s.maxKB5s} (${s.n} samples)`);
+for (const [p, s] of Object.entries(summary)) if (!p.endsWith('-leave')) note('phase ' + p, `median ${s.medianKB5s} kB / 5 s (${visibleMedian ? Math.round(s.medianKB5s / visibleMedian * 100) : '?'} % of visible), min ${s.minKB5s}, max ${s.maxKB5s} (${s.n} samples)`);
 note('audio', `sox dropped per 10 s: ${drops.join(',') || 'no [mac video] lines'} · status at the end "${finalStatus}" · ${problems.join(' | ') || 'no muxer errors'}`);
 if (reconnect) note('server restart', `${reconnect.back ? 'back on the server' : 'NOT back'} after ${reconnect.secs} s · app said: ${reconnect.statuses.join(' / ')}`);
-note('verdict', stalled.length ? `STALLED in: ${stalled.join(', ')}` : 'video kept flowing in every phase');
+note('verdict', stalled.length ? `STALLED or slowed in: ${stalled.join(', ')}` : 'video kept flowing at full rate in every phase');
 console.log('RESULT ' + JSON.stringify({ version, summary, drops, finalStatus, problems, reconnect, stalled }));
 if (log) fs.writeFileSync(path.join(OUT, 'app-log.txt'), log);
 await a.quit();
