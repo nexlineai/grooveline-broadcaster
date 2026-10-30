@@ -7,7 +7,8 @@ const fs = require('fs'), path = require('path'), os = require('os'), readline =
 const { execFileSync, spawnSync, spawn } = require('child_process');
 const APP = '/Applications/Grooveline Broadcaster.app', RES = path.join(APP, 'Contents/Resources');
 const FFMPEG = process.env.GL_FFMPEG || path.join(RES, 'ffmpeg'); // each app carries its own architecture's tools (1.6.3)
-const LOG = path.join(os.homedir(), 'Library/Application Support/Grooveline Broadcaster/logs/broadcaster.log');
+// userData follows package.json "name": electron-builder keeps build.productName out of the packaged package.json.
+let LOG = path.join(os.homedir(), 'Library/Application Support/grooveline-broadcaster/logs/broadcaster.log');
 const OUT = process.argv[2] || path.join(os.homedir(), 'Desktop');
 const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 16);
 const report = [], phases = [], samples = [];
@@ -61,7 +62,7 @@ function avOffset(file) {
   const plist = path.join(APP, 'Contents/Info.plist');
   const ver = (sh('defaults', ['read', plist, 'CFBundleShortVersionString']) || '?').trim();
   say(`App ${ver} · macOS ${sh('sw_vers', ['-productVersion']).trim()} · ${sh('sysctl', ['-n', 'hw.model']).trim()} · ${sh('sysctl', ['-n', 'machdep.cpu.brand_string']).trim()}`);
-  say(`ffmpeg: ${FFMPEG} (${sh('lipo', ['-archs', FFMPEG]).trim()})`);
+  say(`ffmpeg: ${FFMPEG} (${sh('file', ['-b', FFMPEG]).trim()})`); // file, not lipo: lipo is a stub on a Mac without developer tools
 
   console.log('\n1) Camera and microphone permission, as on a new Mac. Quit Grooveline Broadcaster first (Cmd-Q).');
   await ask('   Press Enter when it is quit… ');
@@ -69,6 +70,13 @@ function avOffset(file) {
   console.log('   Now open the app. macOS asks for the microphone, then the camera: allow both.');
   const prev = await ask('   Does the preview show your camera WITHOUT reopening the app? (y/n) ');
   say(`Permission on first open: camera preview ${/^y/i.test(prev) ? 'came up' : 'DID NOT come up'} without reopening`);
+  // The verdict below reads this log, so find out now, not after the run.
+  while (!fs.existsSync(LOG)) {
+    const dir = await ask(`   Can't find the app's log: ${LOG}\n   In the app, SETTINGS says "Log files: ...". Paste that folder here (or just Enter to go on without it): `);
+    if (!dir) break;
+    LOG = path.join(dir.replace(/^~/, os.homedir()), 'broadcaster.log');
+  }
+  say(`App log: ${LOG}${fs.existsSync(LOG) ? '' : ' (NOT FOUND)'}`);
 
   console.log('\n2) In the app: ON AIR › Stream check › Start video check. Then press "Watch" and copy the link it opens.');
   const link = await ask('   Paste the Watch link here (or just Enter to skip the sound/picture check): ');
@@ -124,8 +132,10 @@ function avOffset(file) {
   const first = mv.slice(0, 2).map(x => x.drops);
   say(`\nStart-up: sox dropped ${first.join(' + ') || '?'} buffers in the first 20 s (1.6.1 on this Mac: 30–80).`);
   if (av) say(`Sound vs picture: ${av.error || `${av.claps} claps, ${av.flashes} torch flashes, offsets ${av.offsetsMs.join(', ') || 'none paired'} ms (positive = picture after sound; within ±150 ms is fine)`}`);
-  const stalled = ends.some(([n, a, b]) => { const ll = mv.filter(x => x.t >= a && x.t < b); return ll.length > 1 && new Set(ll.map(x => x.time)).size < ll.length; });
-  say(`\nVerdict: ${stalled ? 'the stream STALLED in a phase above' : 'the stream kept going in every phase'}.`);
+  const inPhase = ([, a, b]) => mv.filter(x => x.t >= a && x.t < b);
+  const stalled = ends.some(e => { const ll = inPhase(e); return ll.length > 1 && new Set(ll.map(x => x.time)).size < ll.length; });
+  const blind = ends.filter(e => inPhase(e).length < 2).map(e => e[0]); // under two log lines, a phase proves nothing
+  say(`\nVerdict: ${stalled ? 'the stream STALLED in a phase above' : blind.length ? `NO DATA for ${blind.join(', ')} (${mv.length} [mac video] lines in ${LOG}), so this run does NOT prove the stream kept going` : 'the stream kept going in every phase'}.`);
   fs.mkdirSync(OUT, { recursive: true });
   const file = path.join(OUT, `real-pass-${ver}-${stamp}.txt`);
   fs.writeFileSync(file, report.join('\n') + '\n');
