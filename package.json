@@ -52,6 +52,12 @@
             "ffmpeg.exe"
           ]
         }
+      ],
+      "extraFiles": [
+        {
+          "from": "assets/install/windows-notes.txt",
+          "to": "Install Notes.txt"
+        }
       ]
     },
     "nsis": {
@@ -166,6 +172,9 @@
         "libsecret-1-0",
         "ffmpeg",
         "pulseaudio-utils | pipewire-pulse"
+      ],
+      "fpm": [
+        "assets/install/linux-notes.txt=/usr/share/doc/grooveline-broadcaster/README.txt"
       ]
     },
     "publish": null,

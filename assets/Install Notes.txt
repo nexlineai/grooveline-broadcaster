@@ -1,18 +1,18 @@
-GROOVELINE BROADCASTER — INSTALL NOTES
-=======================================
+GROOVELINE BROADCASTER - INSTALL NOTES (macOS)
+==============================================
 
-macOS
------
-1. Open the .dmg file
-2. Drag "Grooveline Broadcaster" to your Applications folder
-3. On first launch, macOS may block the app with a security warning
-4. To open it: right-click the app icon → Open → click Open
-   (You only need to do this once)
+1. Drag "Grooveline Broadcaster" onto the Applications folder in this window.
+2. Open it from Applications. macOS asks to allow the camera and the
+   microphone: click OK. The app needs both to show your input and to stream.
+3. Sign in, and the app loads your slot by itself.
 
-Windows
--------
-1. Extract the .zip file
-2. Run the installer (.exe)
-3. If Windows Defender shows a warning, click "More info" → "Run anyway"
+If macOS says it can't check the app for malicious software (only on builds
+that are not notarized yet):
+  - macOS 15 Sequoia and newer: try to open it once, then go to
+    System Settings > Privacy & Security, scroll down and click "Open Anyway".
+  - macOS 14 and older: right-click the app > Open > Open.
+  You only need to do this once.
 
-Need help? Visit grooveline.org or email support@grooveline.org
+Apple Silicon needs macOS 12 or newer. Intel Macs need macOS 10.15 or newer.
+
+Help: https://grooveline.org/start-dj#install-mac   |   support@grooveline.org

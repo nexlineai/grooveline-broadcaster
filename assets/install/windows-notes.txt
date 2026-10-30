@@ -1,0 +1,11 @@
+GROOVELINE BROADCASTER - INSTALL NOTES (Windows)
+================================================
+
+The app is installed. Open "Grooveline Broadcaster" from the Start menu, sign
+in, and it loads your slot by itself.
+
+If Windows said it protected your PC while installing, click
+"More info" > "Run anyway". That message appears for apps Windows does not
+know yet; it is shown once.
+
+Help: https://grooveline.org/start-dj#install-win   |   support@grooveline.org

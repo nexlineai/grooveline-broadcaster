@@ -23,6 +23,13 @@ for a in "dist/mac/Grooveline Broadcaster.app:x86_64" "dist/mac-arm64/Grooveline
     [ "$got" = "$want" ] || die "$app: $t is $got, must be $want only"
   done
 done
+# The install notes sit in each disk image's window (1.6.3).
+NOTES=""
+for d in dist/*.dmg; do
+  mnt=$(mktemp -d); hdiutil attach -nobrowse -readonly -mountpoint "$mnt" "$d" >/dev/null || die "cannot open $d"
+  [ -f "$mnt/Install Notes.txt" ] || { hdiutil detach "$mnt" >/dev/null; die "$d has no Install Notes.txt"; }
+  hdiutil detach "$mnt" >/dev/null; NOTES="$NOTES $(basename "$d"): notes ok;"
+done
 NATIVE="tools: x64 app x86_64, arm64 app arm64"
 if [ "$(uname -m)" = arm64 ]; then
   NATIVE="$NATIVE · native $(arch -arm64 "dist/mac-arm64/Grooveline Broadcaster.app/Contents/Resources/ffmpeg" -hide_banner -version 2>&1 | head -1 | cut -c1-40)"
@@ -41,7 +48,7 @@ sleep 20
 if kill -0 "$PID" 2>/dev/null; then
   kill "$PID"; wait "$PID" 2>/dev/null || true
   tail -20 "$LOG"
-  note "$SYS | $ROS | sox: $SOX | ffmpeg: $FF | $NATIVE | app ran 20 s OK | $DMGS"
+  note "$SYS | $ROS | sox: $SOX | ffmpeg: $FF | $NATIVE |$NOTES app ran 20 s OK | $DMGS"
 else
   cat "$LOG"
   die "$SYS | app EXITED within 20 s | $ROS | $DMGS"

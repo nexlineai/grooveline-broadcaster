@@ -323,6 +323,14 @@ See grooveline memory file for full context.
   fallback), or the box would say "isn't sent" while the check streams the camera. `video-quality-section` still shows
   only on video slots.
 - **SETTINGS tab** sits before HELP (the `.a-tab.right` push is gone).
+- **Install notes travel with the downloads** (Zé, 30 Oct: the instructions are off /broadcast and in the start-dj FAQ,
+  and must also come with the installers). Mac: `assets/Install Notes.txt` in the dmg window (`dmg.contents`). Windows:
+  `assets/install/windows-notes.txt` lands as `Install Notes.txt` in the app folder (`win.extraFiles`). Linux .deb:
+  `assets/install/linux-notes.txt` → `/usr/share/doc/grooveline-broadcaster/README.txt` (`deb.fpm`). Not possible for the
+  AppImage or the NSIS exe (single files); their help is the FAQ (`grooveline.org/start-dj#install-*`) and the HELP tab.
+  CI proves each one (build.yml notices, `mac-smoke.sh`). When the Mac build is notarized, drop the "Open Anyway" block
+  from the Mac notes and the site FAQ together. Windows: a Finish-page "show readme" checkbox was left out, since the
+  installer has never been run on real Windows.
 - `test/mac/e2e.sh` plays its tone with the app's own sox and fails if the tone dies within a second (silence would
   stream just as well).
 

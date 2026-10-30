@@ -1,0 +1,17 @@
+GROOVELINE BROADCASTER - INSTALL NOTES (Linux)
+==============================================
+
+.deb (Ubuntu / Debian): installed with
+  sudo apt install ./Grooveline-Broadcaster-<version>-amd64.deb
+That also installs ffmpeg for you and adds the app to your menu.
+
+AppImage (any distro): the app uses your system ffmpeg, so install it first
+  sudo apt install ffmpeg        (Ubuntu / Debian)
+  sudo pacman -S ffmpeg          (Arch)
+Then make the file executable and run it:
+  chmod +x Grooveline-Broadcaster-*.AppImage
+If it won't start, install libfuse2.
+
+To stream what your DJ software plays, pick the "Monitor of ..." input.
+
+Help: https://grooveline.org/start-dj#install-linux   |   support@grooveline.org
