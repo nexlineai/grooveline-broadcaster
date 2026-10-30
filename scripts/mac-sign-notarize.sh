@@ -87,8 +87,15 @@ for dmg in "${DMGS[@]}"; do
     echo "$why"; detail "$why" 10
     fail "Apple did not accept $name ($status)."
   fi
-  xcrun stapler staple "$dmg" || fail "stapling failed: $name"
-  xcrun stapler validate "$dmg" || fail "staple check failed: $name"
+  st=$(xcrun stapler staple "$dmg" 2>&1) || { echo "$st"; detail "$st" 10; fail "stapling failed: $name"; }
+  echo "$st"
+  # Apple's ticket can take a moment to be readable right after staple: check a few times, and say why if it never passes.
+  vok=""; sv=""
+  for try in 1 2 3 4 5 6; do
+    if sv=$(xcrun stapler validate "$dmg" 2>&1); then vok=1; break; fi
+    echo "  staple check, try $try: $sv"; sleep 20
+  done
+  [ -n "$vok" ] || { detail "stapler validate: $sv" 8; detail "$st" 6; detail "$(codesign -dvv "$dmg" 2>&1)" 6; fail "staple check failed: $name"; }
   cp "$dmg" "$OUT/"   # notarized + stapled: saved before the Gatekeeper checks below
   out=$(spctl -a -t open --context context:primary-signature -vv "$dmg" 2>&1 || true); echo "$out"
   [[ $out == *"Notarized Developer ID"* ]] || { detail "$out"; fail "Gatekeeper does not accept $name."; }
