@@ -87,7 +87,14 @@ for dmg in "${DMGS[@]}"; do
     echo "$why"; detail "$why" 10
     fail "Apple did not accept $name ($status)."
   fi
-  st=$(xcrun stapler staple "$dmg" 2>&1) || { echo "$st"; detail "$st" 10; fail "stapling failed: $name"; }
+  # Stapling asks Apple's ticket server (api.apple-cloudkit.com), and the runner's connection to it drops now and then
+  # (rc.1: the check after staple, rc.2: staple itself, both "network connection was lost"): try again before giving up.
+  st=""; sok=""
+  for try in 1 2 3 4 5 6 7 8; do
+    if st=$(xcrun stapler staple "$dmg" 2>&1); then sok=1; break; fi
+    echo "  staple, try $try: ${st: -400}"; sleep 30
+  done
+  [ -n "$sok" ] || { echo "$st"; detail "$st" 10; fail "stapling failed: $name"; }
   echo "$st"
   # Apple's ticket can take a moment to be readable right after staple: check a few times, and say why if it never passes.
   vok=""; sv=""
